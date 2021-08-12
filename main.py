@@ -1,26 +1,28 @@
 # %% 1: Imports
-import functools
+import os,sys,functools
 from typing import Any
 
-import flax
-import jax
-import ml_collections
-import optax
-import torch
-import torchvision
+sys.path.append("../simclr")
+from simclr_iterator import build_input_fn
+
+import jax, flax, optax, ml_collections
+
 import torchvision.transforms as transforms
 from flax.training import train_state
-from jax import numpy as jnp
-from jax import random, lax
+from jax import numpy as jnp, random, lax
+from flax import jax_utils
+
+import tensorflow as tf
+import tensorflow_datasets as tfds
 
 import defaults
+import input_pipeline
 import loss_functions
 import models
 
 # %% 2: Define model
-
 def create_model(resnet="ResNet50", stem="CIFAR", half_precision=True, **kwargs):
-    is_tpu_platform = jax.local_devices()[0].platform == 'tpu'
+    is_tpu_platform = jax.local_devices()[0].platform == "tpu"
     if half_precision:
         model_dtype = jnp.bfloat16 if is_tpu_platform else jnp.float16
     else:
@@ -31,9 +33,8 @@ def create_model(resnet="ResNet50", stem="CIFAR", half_precision=True, **kwargs)
 
     return resnet(stem=stem, dtype=model_dtype)
 
+
 # generates model variable placeholders
-
-
 def initialized(rng, image_size, model):
     input_shape = (1, 3, image_size, image_size)
 
@@ -42,7 +43,7 @@ def initialized(rng, image_size, model):
         return model.init(*args)
 
     variables = init(rng, jnp.ones(input_shape, model.dtype))
-    return variables['params'], variables['batch_stats']
+    return variables["params"], variables["batch_stats"]
 
 
 ## %% 3: Define loss
@@ -60,54 +61,75 @@ def initialized(rng, image_size, model):
 #   return metrics
 
 # %% 5: Loading data
+def prepare_tf_data(xs):
+  """Convert a input batch from tf Tensors to numpy arrays."""
+  local_device_count = jax.local_device_count()
+  def _prepare(x):
+    # Use _numpy() for zero-copy conversion between TF and NumPy.
+    x = x._numpy()
 
-transform_test = transforms.Compose(
-    [
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465),
-                             (0.2023, 0.1994, 0.2010)),
-    ]
-)
-dataset_train = torchvision.datasets.CIFAR10(
-    root="./",  train=True, download=True, transform=transform_test)
-loader_train = torch.utils.data.DataLoader(dataset_train, batch_size=128)
-batch, targets = next(iter(loader_train))
-batch = jnp.asarray(batch.numpy())
+    # reshape (host_batch_size, height, width, 3) to
+    # (local_devices, device_batch_size, height, width, 3)
+    return x.reshape((local_device_count, -1) + x.shape[1:])
+
+  return jax.tree_map(_prepare, xs)
+
+
+def create_input_iter(dataset_builder: tfds.core.DatasetBuilder, global_batch_size: int = 124):
+  global_batch_size = 1024
+  is_training = True
+  split = 'train'
+  input_fn = build_input_fn(dataset_builder, global_batch_size, is_training, split = split)
+
+  it = map(prepare_tf_data, input_fn())
+  return it
+  
+
+batch = next(iter(it))
+view_a, view_b = batch
+
+
+
+
+# batch = next(iter(it))
 
 # %% 6: Create train state
-
 class TrainState(train_state.TrainState):
     batch_stats: Any
     dynamic_scale: flax.optim.DynamicScale
 
 
 def create_learning_rate_fn(
-        config: ml_collections.ConfigDict,
-        base_learning_rate: float,
-        steps_per_epoch: int):
+    config: ml_collections.ConfigDict, base_learning_rate: float, steps_per_epoch: int
+):
     """Create learning rate schedule."""
     warmup_fn = optax.linear_schedule(
-        init_value=0., end_value=base_learning_rate,
-        transition_steps=config.warmup_epochs * steps_per_epoch)
+        init_value=0.0,
+        end_value=base_learning_rate,
+        transition_steps=config.warmup_epochs * steps_per_epoch,
+    )
 
     cosine_epochs = max(config.num_epochs - config.warmup_epochs, 1)
 
     cosine_fn = optax.cosine_decay_schedule(
-        init_value=base_learning_rate,
-        decay_steps=cosine_epochs * steps_per_epoch)
+        init_value=base_learning_rate, decay_steps=cosine_epochs * steps_per_epoch
+    )
 
     learning_rate_fn = optax.join_schedules(
         schedules=[warmup_fn, cosine_fn],
-        boundaries=[config.warmup_epochs * steps_per_epoch])
+        boundaries=[config.warmup_epochs * steps_per_epoch],
+    )
 
     return learning_rate_fn
 
-def create_train_state(rng, config: ml_collections.ConfigDict,
-                       model, image_size, learning_rate_fn) -> TrainState:
+
+def create_train_state(
+    rng, config: ml_collections.ConfigDict, model, image_size, learning_rate_fn
+) -> TrainState:
     """Create initial training state."""
     dynamic_scale = None
     platform = jax.local_devices()[0].platform
-    if config.half_precision and platform == 'gpu':
+    if config.half_precision and platform == "gpu":
         dynamic_scale = flax.optim.DynamicScale()
     else:
         dynamic_scale = None
@@ -123,7 +145,8 @@ def create_train_state(rng, config: ml_collections.ConfigDict,
         params=params,
         batch_stats=batch_stats,
         tx=tx,
-        dynamic_scale=dynamic_scale)
+        dynamic_scale=dynamic_scale,
+    )
     return state
 
 
@@ -135,8 +158,9 @@ learning_rate_fn = create_learning_rate_fn(config, 1.5, 100)
 
 model = create_model()
 image_size = 32
-state = create_train_state(random.PRNGKey(
-    0), config, model, image_size, learning_rate_fn)
+state = create_train_state(
+    random.PRNGKey(0), config, model, image_size, learning_rate_fn
+)
 
 
 # class ContrastiveTrainState(struct.PyTreeNode):
@@ -148,68 +172,72 @@ state = create_train_state(random.PRNGKey(
 
 # pmean only works inside pmap because it needs an axis name.
 # This function will average the inputs across all devices.
-cross_replica_mean = jax.pmap(lambda x: lax.pmean(x, 'x'), 'x')
+cross_replica_mean = jax.pmap(lambda x: lax.pmean(x, "x"), "x")
 
 
 def sync_batch_stats(state):
-  """Sync the batch statistics across replicas."""
-  # Each device has its own version of the running average batch statistics and
-  # we sync them before evaluation.
-  return state.replace(batch_stats=cross_replica_mean(state.batch_stats))
+    """Sync the batch statistics across replicas."""
+    # Each device has its own version of the running average batch statistics and
+    # we sync them before evaluation.
+    return state.replace(batch_stats=cross_replica_mean(state.batch_stats))
+
 
 def train_step(state, batch, learning_rate_fn):
-  """Perform a single training step."""
-  def loss_fn(params):
-    """loss function used for training."""
-    batch_a = batch
-    encod_a, new_model_state = state.apply_fn(
-        {'params': params, 'batch_stats': state.batch_stats},
-        batch_a,
-        mutable=['batch_stats'])
+    """Perform a single training step."""
 
-    encod_b = encod_a
-    loss, align, unif = loss_functions.ntxent(encod_a, encod_b)
-    
-    return loss, align, unif, new_model_state
+    def loss_fn(params):
+        """loss function used for training."""
+        batch_a = batch
+        encod_a, new_model_state = state.apply_fn(
+            {"params": params, "batch_stats": state.batch_stats},
+            batch_a,
+            mutable=["batch_stats"],
+        )
 
-  step = state.step
-  dynamic_scale = state.dynamic_scale
-  lr = learning_rate_fn(step)
+        encod_b = encod_a
+        loss, align, unif = loss_functions.ntxent(encod_a, encod_b)
 
-  is_fin = None
-  if dynamic_scale:
-    grad_fn = dynamic_scale.value_and_grad(
-        loss_fn, has_aux=True, axis_name='batch')
-    dynamic_scale, is_fin, aux, grads = grad_fn(state.params)
-    # dynamic loss takes care of averaging gradients across replicas
-  else:
-    grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
-    aux, grads = grad_fn(state.params)
-    # Re-use same axis_name as in the call to `pmap(...train_step...)` below.
-    print("aux: {}".format(aux))
-    grads = lax.pmean(grads, axis_name='batch')
+        return loss, align, unif, new_model_state
 
-  loss, align, unif, new_model_state = aux
+    step = state.step
+    dynamic_scale = state.dynamic_scale
+    lr = learning_rate_fn(step)
 
-  loss = lax.pmean(loss, axis_name='batch')
+    is_fin = None
+    if dynamic_scale:
+        grad_fn = dynamic_scale.value_and_grad(loss_fn, has_aux=True, axis_name="batch")
+        dynamic_scale, is_fin, aux, grads = grad_fn(state.params)
+        # dynamic loss takes care of averaging gradients across replicas
+    else:
+        grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
+        aux, grads = grad_fn(state.params)
+        # Re-use same axis_name as in the call to `pmap(...train_step...)` below.
+        print("aux: {}".format(aux))
+        grads = lax.pmean(grads, axis_name="batch")
 
+    loss, align, unif, new_model_state = aux
 
-  new_state = state.apply_gradients(
-      grads=grads, batch_stats=new_model_state['batch_stats'])
-  if dynamic_scale:
-    # if is_fin == False the gradients contain Inf/NaNs and optimizer state and
-    # params should be restored (= skip this step).
-    new_state = new_state.replace(
-        opt_state=jax.tree_multimap(
-            functools.partial(jnp.where, is_fin),
-            new_state.opt_state,
-            state.opt_state),
-        params=jax.tree_multimap(
-            functools.partial(jnp.where, is_fin),
-            new_state.params,
-            state.params))
+    loss = lax.pmean(loss, axis_name="batch")
 
-  return new_state, loss
+    new_state = state.apply_gradients(
+        grads=grads, batch_stats=new_model_state["batch_stats"]
+    )
+    if dynamic_scale:
+        # if is_fin == False the gradients contain Inf/NaNs and optimizer state and
+        # params should be restored (= skip this step).
+        new_state = new_state.replace(
+            opt_state=jax.tree_multimap(
+                functools.partial(jnp.where, is_fin),
+                new_state.opt_state,
+                state.opt_state,
+            ),
+            params=jax.tree_multimap(
+                functools.partial(jnp.where, is_fin), new_state.params, state.params
+            ),
+        )
+
+    return new_state, loss
+
 
 #%% Test train step
 config = defaults.get_config()
@@ -218,12 +246,14 @@ config.num_epochs = 1000
 config.dtype = jnp.float16
 learning_rate_fn = create_learning_rate_fn(config, 1.5, 100)
 
-model = create_model(resnet = "_ResNet1")
-state = create_train_state(random.PRNGKey(0), config, model, image_size, learning_rate_fn)
+model = create_model(resnet="_ResNet1")
+state = create_train_state(
+    random.PRNGKey(0), config, model, image_size, learning_rate_fn
+)
 
 p_train_step = jax.pmap(
-    functools.partial(train_step, learning_rate_fn=learning_rate_fn),
-    axis_name='batch')
+    functools.partial(train_step, learning_rate_fn=learning_rate_fn), axis_name="batch"
+)
 new_state, loss = p_train_step(state, [batch])
 
 
