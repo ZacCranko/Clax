@@ -224,7 +224,7 @@ state = create_train_state(random.PRNGKey(0), config, model, image_size, learnin
 p_train_step = jax.pmap(
     functools.partial(train_step, learning_rate_fn=learning_rate_fn),
     axis_name='batch')
-new_state, loss = p_train_step(state, batch)
+new_state, loss = p_train_step(state, [batch])
 
 
 # # #%% 8. Evaluation step
