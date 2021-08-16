@@ -2,6 +2,8 @@
 import os,sys,functools
 from typing import Any
 
+from jax._src.api import pmap
+
 sys.path.append("../simclr")
 from simclr_iterator import build_input_fn
 
@@ -15,13 +17,10 @@ from flax import jax_utils
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
-import defaults
-import input_pipeline
-import loss_functions
-import models
+import defaults, loss_functions, models 
 
 # %% 2: Define model
-def create_model(resnet="ResNet50", stem="CIFAR", half_precision=True, **kwargs):
+def create_model(resnet="ResNet50", stem="CIFAR", half_precision=False, **kwargs):
     is_tpu_platform = jax.local_devices()[0].platform == "tpu"
     if half_precision:
         model_dtype = jnp.bfloat16 if is_tpu_platform else jnp.float16
@@ -33,10 +32,9 @@ def create_model(resnet="ResNet50", stem="CIFAR", half_precision=True, **kwargs)
 
     return resnet(stem=stem, dtype=model_dtype)
 
-
 # generates model variable placeholders
 def initialized(rng, image_size, model):
-    input_shape = (1, 3, image_size, image_size)
+    input_shape = (128, image_size, image_size, 3)
 
     @jax.jit
     def init(*args):
@@ -45,58 +43,23 @@ def initialized(rng, image_size, model):
     variables = init(rng, jnp.ones(input_shape, model.dtype))
     return variables["params"], variables["batch_stats"]
 
-
-## %% 3: Define loss
-# loss_fn = functools.partial(loss_functions.ntxent, temp=0.5)
-
-# #%% 4: Metric computation
-# #
-# def compute_metrics(logits, labels):
-#   accuracy = jnp.mean(jnp.argmax(logits, -1) == labels)
-#   metrics = {
-#       'loss': loss,
-#       'accuracy': accuracy,
-#   }
-#   metrics = lax.pmean(metrics, axis_name='batch')
-#   return metrics
-
 # %% 5: Loading data
-def prepare_tf_data(xs):
-  """Convert a input batch from tf Tensors to numpy arrays."""
-  local_device_count = jax.local_device_count()
-  def _prepare(x):
-    # Use _numpy() for zero-copy conversion between TF and NumPy.
-    x = x._numpy()
 
-    # reshape (host_batch_size, height, width, 3) to
-    # (local_devices, device_batch_size, height, width, 3)
-    return x.reshape((local_device_count, -1) + x.shape[1:])
-
-  return jax.tree_map(_prepare, xs)
-
-
-def create_input_iter(dataset_builder: tfds.core.DatasetBuilder, global_batch_size: int = 124):
-  global_batch_size = 1024
-  is_training = True
-  split = 'train'
-  input_fn = build_input_fn(dataset_builder, global_batch_size, is_training, split = split)
-
-  it = map(prepare_tf_data, input_fn())
+def create_input_iter(dataset_builder, global_batch_size: int = 128, split: str = 'train', is_training: bool = True):
+  it = build_input_fn(dataset_builder, global_batch_size, is_training, train_mode = 'pretrain', split = split)()
   return it
-  
-
-batch = next(iter(it))
-view_a, view_b = batch
-
-
-
-
-# batch = next(iter(it))
 
 # %% 6: Create train state
 class TrainState(train_state.TrainState):
     batch_stats: Any
     dynamic_scale: flax.optim.DynamicScale
+
+    def variables(self):
+      {'params': self.params, 'batch_stats': self.batch_stats}
+
+    def apply(self, batch, train: bool = True):
+      return self.apply_fn(self.variables(), batch, train = train)
+
 
 
 def create_learning_rate_fn(
@@ -150,19 +113,6 @@ def create_train_state(
     return state
 
 
-config = defaults.get_config()
-config.warmup_epochs = 10
-config.num_epochs = 1000
-config.dtype = jnp.float16
-learning_rate_fn = create_learning_rate_fn(config, 1.5, 100)
-
-model = create_model()
-image_size = 32
-state = create_train_state(
-    random.PRNGKey(0), config, model, image_size, learning_rate_fn
-)
-
-
 # class ContrastiveTrainState(struct.PyTreeNode):
 #   step: int
 #   apply_fn: Callable
@@ -173,7 +123,6 @@ state = create_train_state(
 # pmean only works inside pmap because it needs an axis name.
 # This function will average the inputs across all devices.
 cross_replica_mean = jax.pmap(lambda x: lax.pmean(x, "x"), "x")
-
 
 def sync_batch_stats(state):
     """Sync the batch statistics across replicas."""
@@ -239,31 +188,70 @@ def train_step(state, batch, learning_rate_fn):
     return new_state, loss
 
 
-#%% Test train step
+# %%
+
+def prepare_batch(batch):
+    aug_images, labels = batch
+
+    local_device_count = jax.local_device_count()
+    ch = 3
+    
+    # images is b × h × w × (ch * num_augs)
+    aug_images = aug_images._numpy()
+    labels = labels._numpy()
+
+    num_augs = aug_images.shape[3] // ch
+    aug_list = jnp.split(aug_images, num_augs, axis = -1)
+    
+    # aug_list is (b * num_augs) × h × w × ch
+    images = jnp.concatenate(aug_list)
+
+    # spmd split is xla × (b * num_augs)/xla × h × w × ch
+    spmd_split_images = images.reshape((local_device_count, -1) + images.shape[1:])
+    spmd_split_labels = labels.reshape((local_device_count, -1) + labels.shape[1:])
+    return spmd_split_images, spmd_split_labels
+
+# %%
+
 config = defaults.get_config()
 config.warmup_epochs = 10
 config.num_epochs = 1000
 config.dtype = jnp.float16
 learning_rate_fn = create_learning_rate_fn(config, 1.5, 100)
 
-model = create_model(resnet="_ResNet1")
+model = create_model()
+image_size = 32
 state = create_train_state(
     random.PRNGKey(0), config, model, image_size, learning_rate_fn
 )
 
-p_train_step = jax.pmap(
-    functools.partial(train_step, learning_rate_fn=learning_rate_fn), axis_name="batch"
-)
-new_state, loss = p_train_step(state, [batch])
+it = create_input_iter(tfds.builder("cifar10"), global_batch_size= 512)
+
+batch  = next(iter(it))
+
+images, labels = prepare_batch(batch)
+
+@jax.pmap
+def forward_pass(images):
+  encod = state.apply_fn({"params": state.params, "batch_stats": state.batch_stats}, images, train = False)
+
+  return encod
+
+encodings = forward_pass(images)
+loss, align, unif = loss_functions.ntxent(encodings)
 
 
-# # #%% 8. Evaluation step
-
-# # learning_rate = 1.5
+# it = create_input_iter(tfds.builder("cifar10"), global_batch_size= 1024)
 
 
-# # optimizer = optax.sgd(learning_rate)
-# # otimizer_state = optimizer.init(params)
+# num_transforms = inputs.shape[3] // 3
+# num_transforms = tf.repeat(3, num_transforms)
+# # Split channels, and optionally apply extra batched augmentation.
+# features_list = tf.split(
+#     features, num_or_size_splits=num_transforms, axis=-1)
+# if FLAGS.use_blur and training and FLAGS.train_mode == 'pretrain':
+#   features_list = data_util.batch_random_blur(features_list,
+#                                               FLAGS.image_size,
+#                                               FLAGS.image_size)
+# features = tf.concat(features_list, 0)  # (num_transforms * bsz, h, w, c)
 
-# # updates, opt_state = optimizer.update(grads, opt_state)
-# # params = optax.apply_updates(params, updates)
