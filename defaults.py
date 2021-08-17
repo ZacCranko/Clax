@@ -35,21 +35,26 @@ def get_config():
     config = ml_collections.ConfigDict()
 
     # As defined in the `models` module.
+    config.stem = "CIFAR"
     config.model = "ResNet50"
     # `name` argument of tensorflow_datasets.builder()
     # config.dataset = 'imagenet2012:5.*.*'
     config.dataset = "cifar10"
 
-    config.learning_rate = 0.1
+    config.learning_rate = 0.3
     config.warmup_epochs = 10
     config.momentum = 0.9
-    config.batch_size = 128
-
+    config.batch_size = 512
+  
     config.num_epochs = 1000
-    config.log_every_steps = 100
+    config.log_every_steps = 1
 
     config.cache = False
     config.half_precision = False
+
+    config.step = 0
+
+    
 
     # If num_train_steps==-1 then the number of training steps is calculated from
     # num_epochs using the entire dataset. Similarly for steps_per_eval.

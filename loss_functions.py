@@ -1,23 +1,24 @@
 # %%
 import jax, functools
 from jax import random, numpy as jnp, lax
+import jax.ops
 from jax.scipy.special import logsumexp
 
 from collections import namedtuple
 
 # doesn't seem to be a built-in implementation of this
 @jax.jit
-def normalize(input, ord = 2, eps = 1e-6):
+def normalize(input, ord: int = 2, eps: jnp.float32 = 1e-6):
   factor = jnp.linalg.norm(input, ord = ord, axis = -1, keepdims=True)
   factor = jnp.maximum(factor, eps)
   return input / factor
 
 @jax.jit
-def _ntxent(encod_a, encod_b, temp = 0.5, eps = 1e-6):
+def pytorch_ported_ntxent(encodings, temp: jnp.float32 = 0.5, eps: jnp.float32 = 1e-6):
   """Normalised Temperature Cross Entropy"""
   # use this to verify correctness of the lower implementation
-  encod_a = normalize(encod_a, eps = eps)
-  encod_b = normalize(encod_b, eps = eps)
+  encodings = normalize(encodings, eps = eps)
+  encod_a, encod_b = jnp.array_split(jnp.reshape(encodings, (-1, encodings.shape[-1])), 2)
 
   # cross correlation matrices
   xcor_aa = jnp.matmul(encod_a, encod_a.T) / temp
@@ -37,66 +38,41 @@ def _ntxent(encod_a, encod_b, temp = 0.5, eps = 1e-6):
   # smaller numbers here means the pairs are more uniform
   unif = logsumexp(cat_a, axis = -1).mean() + logsumexp(cat_b, axis = -1).mean()
   unit = unif/2
+  loss = align + unif
+  return loss, (-align * temp, -unif)
 
-  return align + unif, align, unif
 
-
-@functools.partial(jax.pmap, axis_name = "device")
-def ntxent_spmd(device_id, batch, temp):
+def ntxent(device_id: int, batch, temp: jnp.float32):
   batch = normalize(batch)
-  all_batches = jax.lax.all_gather(batch, axis_name = "device")
-  full_batch = jnp.reshape(all_batches, (-1, all_batches.shape[-1]))
+  batch_by_device = jax.lax.all_gather(batch, axis_name = "batch")
+  num_xla, num_rows, _ = batch_by_device.shape
+  batch_by_device = jnp.reshape(batch_by_device, (-1, batch_by_device.shape[-1]))
 
-  # cross corrrelation sub-matrix
-  xcor = batch @ full_batch.transpose() / temp
+  # psuedo cross corrrelation sub-matrix
+  xcor = batch @ batch_by_device.transpose() / temp
 
   # this is some garbage we have to do because jax sucks at tracing off-diagonal ranges
   # and I can't figure out how to call matmul when all_batches is 3-dimensional
-  index = (device_id + 4) % all_batches.shape[0]
-  align = -jnp.mean(batch @ all_batches[index].transpose() / temp)
+  xcor_by_device = jnp.reshape(xcor, (num_xla, num_rows, num_rows))
+  index = (device_id + num_xla//2) % num_xla
+  barlow_outer_product = xcor_by_device[index]
+  align = -jnp.diagonal(barlow_outer_product).mean()
 
   # diag_inds are the indices of the diagonal of the sub-matrix 
-  # batch * batch' within xcor
+  # batch * batch' within xcor, need to set the diagonal to -inf to exclude from logsumexp
   row_inds = jnp.arange(batch.shape[0])
   diag_inds = (row_inds, row_inds + device_id)
   xcor_corrected = jax.ops.index_update(xcor, diag_inds, -jnp.inf)
   
-  unif = jax.nn.logsumexp(xcor_corrected, axis = -1) * 2
-  loss = - (align + unif)
+  unif = -logsumexp(xcor_corrected, axis = -1).mean()
+  loss = align + unif
 
-  return loss, (align, unif)
+  return loss, (-align * temp, -unif)
 
-#%%
-# batch_size = 128
-# encoding_dim = 2048
-# encodings = random.uniform(random.PRNGKey(20), (jax.device_count(), batch_size, encoding_dim), dtype=jnp.bfloat16)
+@jax.jit
+def p_ntxent(global_batch, temp = 0.5):
+  devices = global_batch.shape[0]
+  ntxent = jax.pmap(ntxent, axis_name = "batch")
+  loss, (align, unif) = ntxent(jnp.arange(devices), global_batch, jnp.repeat(temp, devices))
 
-# encodings_a, encodings_b = jnp.array_split(jnp.reshape(encodings, (-1, encodings.shape[-1])), 2)
-
-
-# print("Single NTXEnt")
-# %timeit -n 100 single = _ntxent(encodings_a, encodings_b, temp = 5)
-# print([float(x) for x in single])
-
-
-# print("Parallel NTXEnt")
-# %timeit -n 100 parallel = ntxent(encodings, temp = 5)
-# print([float(x) for x in parallel])
-
-# batch = full_batch[0]
-# id = 0
-
-# batch_size, _ = batch.shape
-# device_id = 1
-# diag_indices = (jnp.arange(batch_sze), jnp.arange(batch_size) + device_id)
-
-# batch = full_batch[0]
-
-# # jnp.arange()
-
-# # jax.ops.index_update(batch, , -jnp.inf)
-# # %%
-
-
-# row_inds = jnp.arange(1024)
-# diag_inds = (row_inds, row_inds + device_id)
+  return jnp.mean(loss), (jnp.mean(align), jnp.mean(unif))
