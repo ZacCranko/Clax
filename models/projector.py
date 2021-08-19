@@ -33,4 +33,20 @@ class MLP(nn.Module):
     
     return x
 
-SimCLR = partial(MLP, stage_sizes=[2048, 2048, 128])
+SimCLR = partial(MLP, stage_sizes=[2048, 128])
+
+CIFAR10Classifier = partial(MLP, stage_sizes=[10])
+
+class Assembly(nn.Module):
+    stem: Any
+    backbone: Any
+    projector: Any
+    dtype: Any = jnp.float32
+
+    @nn.compact
+    def __call__(self, x, train: bool = True):
+      backbone = self.backbone(stem = self.stem, dtype = self.dtype)
+      projector = self.projector(dtype = self.dtype)
+
+      return projector(backbone(x, train = train), train = train)
+  
