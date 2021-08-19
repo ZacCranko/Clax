@@ -36,9 +36,9 @@ def pytorch_ported_ntxent(encodings, temp: jnp.float32 = 0.5, eps: jnp.float32 =
   cat_b = jnp.concatenate((xcor_ab, xcor_bb),   axis = -1)
 
   # smaller numbers here means the pairs are more uniform
-  unif = logsumexp(cat_a, axis = -1).mean() + logsumexp(cat_b, axis = -1).mean()
-  unit = unif/2
+  unif = logsumexp(cat_a, axis = -1).mean()/2 + logsumexp(cat_b, axis = -1).mean()/2
   loss = align + unif
+  
   return loss, (-align * temp, -unif)
 
 

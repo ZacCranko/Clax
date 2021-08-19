@@ -1,34 +1,17 @@
-# Copyright 2021 The Flax Authors.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-# Copyright 2021 The Flax Authors.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""Default Hyperparameter configuration."""
-
 import ml_collections
 
+def get_clf_config():
+    """Get the default hyperparameter configuration."""
+    clf_config = ml_collections.ConfigDict()
+
+    clf_config.learning_rate = 1.0
+    clf_config.momentum = 0.9
+    clf_config.num_epochs = 5
+    clf_config.batch_size = 2048
+    clf_config.cache_dataset = True
+    clf_config.l2coeff = 0.001
+
+    return clf_config
 
 def get_config():
     """Get the default hyperparameter configuration."""
@@ -37,14 +20,16 @@ def get_config():
     # As defined in the `models` module.
     config.stem = "CIFAR"
     config.model = "ResNet50"
+    config.projector = "CIFAR10Classifier"
+
     # `name` argument of tensorflow_datasets.builder()
     # config.dataset = 'imagenet2012:5.*.*'
     config.dataset = "cifar10"
 
-    config.learning_rate = 1.5
+    config.learning_rate = 1.0
     config.warmup_epochs = 10
     config.momentum = 0.9
-    config.batch_size = 2048
+    config.batch_size = 1024
   
     config.num_epochs = 30
     config.log_every_steps = 1
@@ -54,7 +39,7 @@ def get_config():
 
     config.step = 0
 
-    
+    config.clf_config = get_clf_config()
 
     # If num_train_steps==-1 then the number of training steps is calculated from
     # num_epochs using the entire dataset. Similarly for steps_per_eval.
