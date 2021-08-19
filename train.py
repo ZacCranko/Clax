@@ -57,12 +57,13 @@ def prepare_batch(batch):
     images = jnp.concatenate(aug_list)
 
     labels = labels._numpy()
-    labels = jnp.repeat(labels, images.shape[0] // labels.shape[0], axis = 0)
+    labels = jnp.concatenate([labels for _ in range(num_augs)], axis = 0)
 
     # xla split is xla × (b * num_augs)/xla × h × w × ch
     xla_split_images = images.reshape((local_device_count, -1) + images.shape[1:])
     xla_split_labels = labels.reshape((local_device_count, -1) + labels.shape[1:])
     return xla_split_images, xla_split_labels
+
 
 def create_input_iter(config, dataset_builder, is_training):
   ds = data.get_dataset(dataset_builder, batch_size = config.batch_size, is_training = is_training, cache_dataset = config.cache_dataset)
@@ -74,6 +75,7 @@ def create_input_iter(config, dataset_builder, is_training):
 class TrainState(train_state.TrainState):
     batch_stats: Any
     dynamic_scale: flax.optim.DynamicScale
+    # assembly: flax.linen.Module
 
 def create_learning_rate_fn(
     config: ml_collections.ConfigDict, base_learning_rate: float, steps_per_epoch: int
@@ -99,7 +101,7 @@ def create_learning_rate_fn(
     return learning_rate_fn
 
 def create_train_state(
-    rng, config: ml_collections.ConfigDict, model, image_shape, learning_rate_fn
+    rng, config: ml_collections.ConfigDict, assembly, image_shape, learning_rate_fn
 ) -> TrainState:
     """Create initial training state."""
     dynamic_scale = None
@@ -109,14 +111,14 @@ def create_train_state(
     else:
         dynamic_scale = None
 
-    params, batch_stats = initialized(rng, image_shape, model)
+    params, batch_stats = initialized(rng, image_shape, assembly)
     tx = optax.lars(
         learning_rate=learning_rate_fn,
         momentum=config.momentum,
         nesterov=True,
     )
     state = TrainState.create(
-        apply_fn=model.apply,
+        apply_fn=assembly.apply,
         params=params,
         batch_stats=batch_stats,
         tx=tx,
@@ -148,14 +150,20 @@ def train_step(state, device_id, images, labels, learning_rate_fn):
 
     def loss_fn(params):
         """loss function used for training."""
-        logits, new_model_state = state.apply_fn(
+        projections, new_model_state = state.apply_fn(
             {"params": params, "batch_stats": state.batch_stats},
             images, mutable=["batch_stats"],
         )
-        # loss, (align, unif) = objective.ntxent(device_id, logits, temp = 0.5)
-        metrics = compute_metrics(logits, labels)
+        loss, (align, unif) = objective.ntxent(device_id, projections, temp = 0.5)
+        # metrics = compute_metrics(logits, labels)
 
-        loss = metrics['cross_entropy']
+        metrics = {
+          "loss" : loss,
+          "align" : align,
+          "unif" : unif,
+        }
+
+        # loss = metrics['cross_entropy']
 
         return loss, (new_model_state, metrics)
 
@@ -172,9 +180,6 @@ def train_step(state, device_id, images, labels, learning_rate_fn):
     
     metrics['learning_rate'] = learning_rate_fn(step)
     return new_state, lax.pmean(metrics, axis_name ="batch")
-
-#%%
-
 
 def train_and_evaluate(config: ml_collections.ConfigDict) -> TrainState:
   rng = random.PRNGKey(0)
@@ -244,46 +249,45 @@ def train_and_evaluate(config: ml_collections.ConfigDict) -> TrainState:
   return state
 
 
-# %%
+# # %%
 # dataset_builder = tfds.builder('cifar10')
 # config = defaults.get_config()
-# #%%
+# # #%%
 
-# train_dataset = create_input_iter(dataset_builder, batch_size = config.batch_size, is_training = False, cache_dataset = config.cache_dataset)
-# def create_input_iter(dataset_builder, batch_size, is_training, cache_dataset):
-#   ds = data.get_dataset(dataset_builder, batch_size = config.batch_size, is_training = is_training, cache_dataset = config.cache_dataset)
-#   it = map(prepare_batch, ds)
-#   return it
-
-# dataset_builder = tfds.builder('cifar10')
-
-# ds = data.get_dataset(dataset_builder, batch_size = config.batch_size, is_training = True, cache_dataset = config.cache_dataset)
+# train_dataset = create_input_iter(config, dataset_builder, is_training = True)
 
 # import matplotlib.pyplot as plt
+# images, labels = batch = next(iter(train_dataset))
 
-# images, labels = batch = next(iter(ds))
-
-# p_images, p_labels = prepare_batch(batch)
+# # p_images, p_labels = prepare_batch(batch)
 
 
-# def prepare_batch(batch):
-#     aug_images, labels = batch
+# # def prepare_batch(batch):
+# #     aug_images, labels = batch
 
-#     local_device_count = jax.local_device_count()
-#     ch = 3
+# #     local_device_count = jax.local_device_count()
+# #     ch = 3
     
-#     # images is b × h × w × (ch * num_augs)
-#     aug_images = aug_images._numpy()
-#     num_augs = aug_images.shape[3] // ch
-#     aug_list = jnp.split(aug_images, num_augs, axis = -1)
+# #     # images is b × h × w × (ch * num_augs)
+# #     aug_images = aug_images._numpy()
+# #     num_augs = aug_images.shape[3] // ch
+# #     aug_list = jnp.split(aug_images, num_augs, axis = -1)
     
-#     # aug_list is (b * num_augs) × h × w × ch
-#     images = jnp.concatenate(aug_list)
+# #     # aug_list is (b * num_augs) × h × w × ch
+# #     images = jnp.concatenate(aug_list)
 
-#     labels = labels._numpy()
-#     labels = jnp.repeat(labels, images.shape[0] // labels.shape[0], axis = 0)
+# #     labels = labels._numpy()
+# #     labels = jnp.repeat(labels, images.shape[0] // labels.shape[0], axis = 0)
 
-#     # xla split is xla × (b * num_augs)/xla × h × w × ch
-#     xla_split_images = images.reshape((local_device_count, -1) + images.shape[1:])
-#     xla_split_labels = labels.reshape((local_device_count, -1) + labels.shape[1:])
-#     return xla_split_images, xla_split_labels
+# #     # xla split is xla × (b * num_augs)/xla × h × w × ch
+# #     xla_split_images = images.reshape((local_device_count, -1) + images.shape[1:])
+# #     xla_split_labels = labels.reshape((local_device_count, -1) + labels.shape[1:])
+# #     return xla_split_images, xla_split_labels
+
+
+# # %% 
+# ds = data.get_dataset(dataset_builder, batch_size = config.batch_size, is_training = True, cache_dataset = config.cache_dataset)
+# t_images, t_labels = next(iter(ds))
+# t_images, t_labels = t_images._numpy(), t_labels._numpy()
+
+# rpt = jnp.repeat(t_labels, 2, axis = 0)

@@ -49,7 +49,7 @@ def get_config():
     config.num_epochs = 30
     config.log_every_steps = 1
 
-    config.cache_dataset = False
+    config.cache_dataset = True
     config.half_precision = False
 
     config.step = 0

@@ -6,7 +6,8 @@ import wandb
 import jax 
 
 if __name__ == "__main__":
-  assert jax.local_device_count() > 1
+  if jax.local_device_count() % 2 != 0:
+    raise RuntimeError("Parallel execution requires an even number of XLA devices.")
 
   wandb.init(project='jax', entity='zaccranko')
   config = defaults.get_config()

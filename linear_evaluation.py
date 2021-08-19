@@ -63,11 +63,3 @@ def train_and_evaluate(state, train_ds, batch_size, num_steps):
   for step, batch in zip(range(num_steps), train_ds):
     state, metrics = train_step(state, *batch)
 
-#%%
-num_classes = 10
-dtype = jnp.float32
-rng = random.PRNGKey(0)
-
-clf = flax.linen.Dense(num_classes, dtype = dtype)
-params = clf.init(rng, jnp.ones((128, num_classes)))
-
