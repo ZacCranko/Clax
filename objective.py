@@ -5,16 +5,16 @@ import jax.ops
 from jax.scipy.special import logsumexp
 
 from collections import namedtuple
-
+import optax._src.numerics as numerics
 # doesn't seem to be a built-in implementation of this
 @jax.jit
-def normalize(input, ord: int = 2, eps: jnp.float32 = 1e-6):
-  factor = jnp.linalg.norm(input, ord = ord, axis = -1, keepdims=True)
+def normalize(input, eps: float = 1e-4):
+  factor = jnp.linalg.norm(input, ord = 2, axis = -1, keepdims=True)
   factor = jnp.maximum(factor, eps)
   return input / factor
 
 @jax.jit
-def pytorch_ported_ntxent(encodings, temp: jnp.float32 = 0.5, eps: jnp.float32 = 1e-6):
+def pytorch_ported_ntxent(encodings, temp: float = 0.5, eps: float = 1e-4):
   """Normalised Temperature Cross Entropy"""
   # use this to verify correctness of the lower implementation
   encodings = normalize(encodings, eps = eps)
@@ -39,11 +39,11 @@ def pytorch_ported_ntxent(encodings, temp: jnp.float32 = 0.5, eps: jnp.float32 =
   unif = logsumexp(cat_a, axis = -1).mean()/2 + logsumexp(cat_b, axis = -1).mean()/2
   loss = align + unif
   
-  return loss, (-align * temp, -unif)
+  return loss, (-align * temp, -unif * temp)
 
 
-def ntxent(device_id: int, batch, temp: jnp.float32):
-  batch = normalize(batch)
+def ntxent(device_id: int, batch, temp: float, eps: float = 1e-4):
+  batch = normalize(batch, eps = eps)
   batch_by_device = jax.lax.all_gather(batch, axis_name = "batch")
   num_xla, num_rows, _ = batch_by_device.shape
   batch_by_device = jnp.reshape(batch_by_device, (-1, batch_by_device.shape[-1]))
@@ -52,7 +52,7 @@ def ntxent(device_id: int, batch, temp: jnp.float32):
   xcor = batch @ batch_by_device.transpose() / temp
 
   # this is some garbage we have to do because jax sucks at tracing off-diagonal ranges
-  # and I can't figure out how to call matmul when all_batches is 3-dimensional
+  # and I can't figure out how to call matmul when batch_by_device is 3-dimensional
   xcor_by_device = jnp.reshape(xcor, (num_xla, num_rows, num_rows))
   index = (device_id + num_xla//2) % num_xla
   barlow_outer_product = xcor_by_device[index]
@@ -61,13 +61,13 @@ def ntxent(device_id: int, batch, temp: jnp.float32):
   # diag_inds are the indices of the diagonal of the sub-matrix 
   # batch * batch' within xcor, need to set the diagonal to -inf to exclude from logsumexp
   row_inds = jnp.arange(batch.shape[0])
-  diag_inds = (row_inds, row_inds + device_id)
+  diag_inds = (row_inds, row_inds + device_id * num_rows)
   xcor_corrected = jax.ops.index_update(xcor, diag_inds, -jnp.inf)
   
-  unif = -logsumexp(xcor_corrected, axis = -1).mean()
+  unif = logsumexp(xcor_corrected, axis = -1).mean()
   loss = align + unif
 
-  return loss, (-align * temp, -unif)
+  return loss, (-align * temp, -unif * temp)
 
 @jax.jit
 def p_ntxent(global_batch, temp = 0.5):

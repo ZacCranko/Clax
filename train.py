@@ -1,5 +1,6 @@
 # %% 1: Imports
 import os, sys, time
+
 from typing import Any
 from absl import logging
 from tensorflow_datasets.core import dataset_builder
@@ -16,7 +17,6 @@ import tensorflow_datasets as tfds
 import defaults, objective, models, data, linear_evaluation
 import wandb
 
-# %% 2: Define model
 def create_model(config: ml_collections.ConfigDict):
     is_tpu_platform = jax.local_devices()[0].platform == "tpu"
     if config.half_precision:
@@ -31,8 +31,7 @@ def create_model(config: ml_collections.ConfigDict):
                                          dtype = model_dtype)
     return assembly
 
-# generates model variable placeholders
-def initialized(rng, image_shape, model):
+def initialized(rng, image_shape: int, model):
     input_shape = (128, ) + image_shape
 
     @jax.jit
@@ -42,7 +41,6 @@ def initialized(rng, image_shape, model):
     variables = init(rng, jnp.ones(input_shape, model.dtype))
     return variables["params"], variables["batch_stats"]
 
-# %% 5: Loading data
 def prepare_batch(batch):
     aug_images, labels = batch
 
@@ -71,7 +69,6 @@ def create_input_iter(config, dataset_builder, is_training):
   return it
 
 
-# %% 6: Create train state
 class TrainState(train_state.TrainState):
     batch_stats: Any
     dynamic_scale: flax.optim.DynamicScale
@@ -125,7 +122,6 @@ def create_train_state(
     )
     return state
 
-# %% 7: Training step
 cross_replica_mean = jax.pmap(lambda x: lax.pmean(x, "x"), "x")
 
 def compute_metrics(logits, one_hot_labels):
@@ -153,16 +149,18 @@ def train_step(state, device_id, images, labels, learning_rate_fn):
             {"params": params, "batch_stats": state.batch_stats},
             images, mutable=["batch_stats"],
         )
-        
+        all_encodings = jax.lax.all_gather(projections, axis_name = "batch")
+        all_encodings = jnp.reshape(all_encodings, (-1, all_encodings.shape[-1]))
+        loss, (align, unif) = objective.pytorch_ported_ntxent(all_encodings, temp = 0.5)
         # loss, (align, unif) = objective.ntxent(device_id, projections, temp = 0.5)
-        # metrics = {
-        #   "loss" : loss,
-        #   "align" : align,
-        #   "unif" : unif,
-        # }
+        metrics = {
+          "loss" : loss,
+          "align" : align,
+          "unif" : unif,
+        }
 
-        metrics = compute_metrics(projections, labels)
-        loss = metrics['cross_entropy']
+        # metrics = compute_metrics(projections, labels)
+        # loss = metrics['cross_entropy']
 
         return loss, (new_model_state, metrics)
 
@@ -221,8 +219,8 @@ def train_and_evaluate(config: ml_collections.ConfigDict) -> TrainState:
     state, metrics = p_train_step(state, device_ids, *batch)
 
     if (step + 1) % (steps_per_epoch * 5) == 0:
-      linear_metrics = linear_evaluation.evaluate(random.PRNGKey(step), config.clf_config, jax_utils.unreplicate(state), 
-                                                  assembly, image_shape, num_classes, steps_per_epoch, train_dataset)
+      linear_metrics = linear_evaluation.evaluate(random.PRNGKey(step), config.clf_config, 
+                                                  jax_utils.unreplicate(state), assembly, dataset_builder)
       wandb.log({
         "epoch" : step / steps_per_epoch,
         "linear_accuracy" : linear_metrics["max_accuracy"]

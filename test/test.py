@@ -1,7 +1,7 @@
 from absl.testing import absltest
 import sys
 sys.path.append("..")
-import main, defaults, loss_functions
+import main, defaults, objective
 
 import jax
 from jax import random, numpy as jnp

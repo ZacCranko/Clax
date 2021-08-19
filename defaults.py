@@ -14,13 +14,14 @@ def get_clf_config():
     return clf_config
 
 def get_config():
-    """Get the default hyperparameter configuration."""
     config = ml_collections.ConfigDict()
+
+    config.clf_config = get_clf_config()
 
     # As defined in the `models` module.
     config.stem = "CIFAR"
     config.model = "ResNet50"
-    config.projector = "CIFAR10Classifier"
+    config.projector = "SimCLR"
 
     # `name` argument of tensorflow_datasets.builder()
     # config.dataset = 'imagenet2012:5.*.*'
@@ -30,16 +31,13 @@ def get_config():
     config.warmup_epochs = 10
     config.momentum = 0.9
     config.batch_size = 1024
-  
+    config.step = 0
     config.num_epochs = 30
     config.log_every_steps = 1
 
     config.cache_dataset = True
     config.half_precision = False
-
-    config.step = 0
-
-    config.clf_config = get_clf_config()
+    
 
     # If num_train_steps==-1 then the number of training steps is calculated from
     # num_epochs using the entire dataset. Similarly for steps_per_eval.
