@@ -3,10 +3,6 @@ import os, sys, time
 from typing import Any
 from absl import logging
 from tensorflow_datasets.core import dataset_builder
-
-sys.path.append("../simclr")
-from simclr_iterator import get_dataset_iter
-
 import jax, flax, optax, ml_collections, functools
 
 import torchvision.transforms as transforms
@@ -17,7 +13,7 @@ from flax import jax_utils
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
-import defaults, loss_functions, models 
+import defaults, objective, models, data
 import wandb
 
 # %% 2: Define model
@@ -46,7 +42,6 @@ def initialized(rng, image_shape, model):
     return variables["params"], variables["batch_stats"]
 
 # %% 5: Loading data
-
 def prepare_batch(batch):
     aug_images, labels = batch
 
@@ -68,6 +63,12 @@ def prepare_batch(batch):
     xla_split_images = images.reshape((local_device_count, -1) + images.shape[1:])
     xla_split_labels = labels.reshape((local_device_count, -1) + labels.shape[1:])
     return xla_split_images, xla_split_labels
+
+def create_input_iter(config, dataset_builder, is_training):
+  ds = data.get_dataset(dataset_builder, batch_size = config.batch_size, is_training = is_training, cache_dataset = config.cache_dataset)
+  it = map(prepare_batch, ds)
+  return it
+
 
 # %% 6: Create train state
 class TrainState(train_state.TrainState):
@@ -151,7 +152,7 @@ def train_step(state, device_id, images, labels, learning_rate_fn):
             {"params": params, "batch_stats": state.batch_stats},
             images, mutable=["batch_stats"],
         )
-        # loss, (align, unif) = loss_functions.ntxent(device_id, logits, temp = 0.5)
+        # loss, (align, unif) = objective.ntxent(device_id, logits, temp = 0.5)
         metrics = compute_metrics(logits, labels)
 
         loss = metrics['cross_entropy']
@@ -174,6 +175,7 @@ def train_step(state, device_id, images, labels, learning_rate_fn):
 
 #%%
 
+
 def train_and_evaluate(config: ml_collections.ConfigDict) -> TrainState:
   rng = random.PRNGKey(0)
 
@@ -184,7 +186,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict) -> TrainState:
   steps_per_epoch    = num_examples // config.batch_size 
   base_learning_rate = config.learning_rate * config.batch_size / 256.
 
-  train_iter = get_dataset_iter(dataset_builder, batch_size = config.batch_size, is_training = True, cache_dataset = config.cache_dataset)
+  train_dataset = create_input_iter(config, dataset_builder, is_training = True)
 
   model = create_model(config)
 
@@ -207,15 +209,17 @@ def train_and_evaluate(config: ml_collections.ConfigDict) -> TrainState:
   num_steps = int(steps_per_epoch * config.num_epochs)
   
   logging.info('Compiling model')
-
-  for step, batch in zip(range(step_offset, num_steps), train_iter):
+  for step, batch in zip(range(step_offset, num_steps), train_dataset):
     train_metrics = []
     train_metrics_last_t = time.time()
     
-    image_batch, label_batch = prepare_batch(batch)
-    state, metrics = p_train_step(state, device_ids, image_batch, label_batch)
+    state, metrics = p_train_step(state, device_ids, *batch)
     
-    state = sync_batch_stats(state)
+    if (step + 1) % steps_per_epoch == 0:
+      epoch = step // steps_per_epoch
+
+      # sync batch statistics across replicas
+      state = sync_batch_stats(state)
 
     if step == step_offset:
       logging.info('Training')
@@ -240,42 +244,46 @@ def train_and_evaluate(config: ml_collections.ConfigDict) -> TrainState:
   return state
 
 
-# #%%
-# dataset_builder = tfds.builder("cifar10")
-# train_iter = get_dataset_iter(dataset_builder, batch_size = 1024, is_training = True)
-
-# batch = next(iter(train_iter))
-
-# images, labels = prepare_batch(batch)
-
-# #%%
+# %%
+# dataset_builder = tfds.builder('cifar10')
 # config = defaults.get_config()
-# logging.set_verbosity(logging.INFO)
-# config.projector = "CIFAR10Classifier"
-# num_examples       = dataset_builder.info.splits['train'].num_examples
-# image_size, _, _   = dataset_builder.info.features['image'].shape
-# steps_per_epoch    = num_examples // config.batch_size 
-# base_learning_rate = config.learning_rate * config.batch_size / 256.
+# #%%
 
-# train_iter = get_dataset_iter(dataset_builder, batch_size = config.batch_size, is_training = True)
+# train_dataset = create_input_iter(dataset_builder, batch_size = config.batch_size, is_training = False, cache_dataset = config.cache_dataset)
+# def create_input_iter(dataset_builder, batch_size, is_training, cache_dataset):
+#   ds = data.get_dataset(dataset_builder, batch_size = config.batch_size, is_training = is_training, cache_dataset = config.cache_dataset)
+#   it = map(prepare_batch, ds)
+#   return it
 
-# model = create_model(config)
+# dataset_builder = tfds.builder('cifar10')
 
-# learning_rate_fn = create_learning_rate_fn(
-#     config, base_learning_rate, steps_per_epoch)
+# ds = data.get_dataset(dataset_builder, batch_size = config.batch_size, is_training = True, cache_dataset = config.cache_dataset)
 
-# model = create_model(config)
+# import matplotlib.pyplot as plt
 
-# image_size, _, _   = dataset_builder.info.features['image'].shape
-# state = create_train_state(
-#       random.PRNGKey(0), config, model, image_size, learning_rate_fn
-#   )
+# images, labels = batch = next(iter(ds))
+
+# p_images, p_labels = prepare_batch(batch)
 
 
-# # %%
+# def prepare_batch(batch):
+#     aug_images, labels = batch
 
-# batch = next(iter(train_iter))
+#     local_device_count = jax.local_device_count()
+#     ch = 3
+    
+#     # images is b × h × w × (ch * num_augs)
+#     aug_images = aug_images._numpy()
+#     num_augs = aug_images.shape[3] // ch
+#     aug_list = jnp.split(aug_images, num_augs, axis = -1)
+    
+#     # aug_list is (b * num_augs) × h × w × ch
+#     images = jnp.concatenate(aug_list)
 
-# images, labels = prepare_batch(batch)
+#     labels = labels._numpy()
+#     labels = jnp.repeat(labels, images.shape[0] // labels.shape[0], axis = 0)
 
-# logits = state.apply_fn({'params' : state.params, 'batch_stats': state.batch_stats}, images[0], train = False)
+#     # xla split is xla × (b * num_augs)/xla × h × w × ch
+#     xla_split_images = images.reshape((local_device_count, -1) + images.shape[1:])
+#     xla_split_labels = labels.reshape((local_device_count, -1) + labels.shape[1:])
+#     return xla_split_images, xla_split_labels

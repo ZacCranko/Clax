@@ -41,15 +41,15 @@ def get_config():
     # config.dataset = 'imagenet2012:5.*.*'
     config.dataset = "cifar10"
 
-    config.learning_rate = 0.3
+    config.learning_rate = 1.5
     config.warmup_epochs = 10
     config.momentum = 0.9
-    config.batch_size = 512
+    config.batch_size = 2048
   
-    config.num_epochs = 1000
+    config.num_epochs = 30
     config.log_every_steps = 1
 
-    config.cache = False
+    config.cache_dataset = False
     config.half_precision = False
 
     config.step = 0

@@ -12,5 +12,6 @@ if __name__ == "__main__":
   config = defaults.get_config()
   config.projector = "CIFAR10Classifier"
   logging.set_verbosity(logging.INFO)
+  
   print(config)
   train.train_and_evaluate(config)
