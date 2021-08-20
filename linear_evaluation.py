@@ -83,7 +83,7 @@ def evaluate(rng: random.PRNGKey,
              clf_config, 
              state: train_state.TrainState, 
              assembly: flax.linen.Module, 
-             dataset_builder):
+             dataset_builder, train_dataset):
 
   num_examples = dataset_builder.info.splits['train'].num_examples
   image_shape  = dataset_builder.info.features['image'].shape
@@ -91,8 +91,6 @@ def evaluate(rng: random.PRNGKey,
   steps_per_epoch    = num_examples // clf_config.batch_size 
   base_learning_rate = clf_config.learning_rate * clf_config.batch_size / 256.
   num_steps = clf_config.num_epochs * steps_per_epoch
-
-  train_dataset = train.create_input_iter(clf_config, dataset_builder, is_training = False)
   
   params = flax.core.frozen_dict.freeze({"params" : state.params["backbone"], "batch_stats" : state.batch_stats["backbone"] })
   encod_state = EncoderState.create(apply_fn = assembly.backbone.apply, params = params)
