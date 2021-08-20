@@ -1,4 +1,3 @@
-# %%
 import jax, functools
 from jax import random, numpy as jnp, lax
 import jax.ops
@@ -8,16 +7,16 @@ from collections import namedtuple
 import optax._src.numerics as numerics
 # doesn't seem to be a built-in implementation of this
 @jax.jit
-def normalize(input, eps: float = 1e-4):
+def normalize(input, min_norm: float = 1e-4):
   factor = jnp.linalg.norm(input, ord = 2, axis = -1, keepdims=True)
-  factor = jnp.maximum(factor, eps)
+  factor = jnp.maximum(factor, min_norm)
   return input / factor
 
 @jax.jit
 def pytorch_ported_ntxent(encodings, temp: float = 0.5, eps: float = 1e-4):
   """Normalised Temperature Cross Entropy"""
   # use this to verify correctness of the lower implementation
-  encodings = normalize(encodings, eps = eps)
+  encodings = normalize(encodings, min_norm = eps)
   encod_a, encod_b = jnp.array_split(jnp.reshape(encodings, (-1, encodings.shape[-1])), 2)
 
   # cross correlation matrices
@@ -42,26 +41,27 @@ def pytorch_ported_ntxent(encodings, temp: float = 0.5, eps: float = 1e-4):
   return loss, (-align * temp, -unif * temp)
 
 
-def ntxent(device_id: int, batch, temp: float, eps: float = 1e-4):
-  batch = normalize(batch, eps = eps)
-  batch_by_device = jax.lax.all_gather(batch, axis_name = "batch")
-  num_xla, num_rows, _ = batch_by_device.shape
-  batch_by_device = jnp.reshape(batch_by_device, (-1, batch_by_device.shape[-1]))
+def ntxent(device_id: int, batch, temp: float, axis_name: str = "batch", min_norm: float = 1e-4):
+  batch = normalize(batch, min_norm = min_norm)
+  full_batch_by_device = jax.lax.all_gather(batch, axis_name = axis_name)
+  num_xla, batch_size, _ = full_batch_by_device.shape
+  full_batch = jnp.reshape(full_batch_by_device, (-1, full_batch_by_device.shape[-1]))
 
   # psuedo cross corrrelation sub-matrix
-  xcor = batch @ batch_by_device.transpose() / temp
+  xcor = batch @ full_batch.transpose() / temp
 
   # this is some garbage we have to do because jax sucks at tracing off-diagonal ranges
   # and I can't figure out how to call matmul when batch_by_device is 3-dimensional
-  xcor_by_device = jnp.reshape(xcor, (num_xla, num_rows, num_rows))
+  # xcor_by_device = jnp.reshape(xcor, (num_xla, batch_size, batch_size))
   index = (device_id + num_xla//2) % num_xla
-  barlow_outer_product = xcor_by_device[index]
-  align = -jnp.diagonal(barlow_outer_product).mean()
+
+  # multiply by batch_size to correct for the pair inner product all being divided by temp
+  align = -jnp.mean(jnp.multiply(batch, full_batch_by_device[index])) * batch_size / temp
 
   # diag_inds are the indices of the diagonal of the sub-matrix 
   # batch * batch' within xcor, need to set the diagonal to -inf to exclude from logsumexp
-  row_inds = jnp.arange(batch.shape[0])
-  diag_inds = (row_inds, row_inds + device_id * num_rows)
+  row_inds = jnp.arange(batch_size)
+  diag_inds = (row_inds, row_inds + device_id * batch_size)
   xcor_corrected = jax.ops.index_update(xcor, diag_inds, -jnp.inf)
   
   unif = logsumexp(xcor_corrected, axis = -1).mean()

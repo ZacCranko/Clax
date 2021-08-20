@@ -14,6 +14,7 @@ class MLP(nn.Module):
   stage_sizes: Sequence[int]
   dtype: Any = jnp.float32
   act: Callable = nn.relu
+  axis_name: str = None
   
   @nn.compact
   def __call__(self, x, train: bool = True):
@@ -22,7 +23,8 @@ class MLP(nn.Module):
                    use_running_average=not train,
                    momentum=0.9,
                    epsilon=1e-5,
-                   dtype=self.dtype)
+                   dtype=self.dtype,
+                   axis_name = self.axis_name)
 
     for i, size in enumerate(self.stage_sizes[:-1]):
         x = dense(features = size)(x)

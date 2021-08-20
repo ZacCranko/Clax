@@ -1,7 +1,7 @@
 # %% 1: Imports
 import os, sys, time
 
-from typing import Any
+from typing import Any, Callable
 from absl import logging
 from tensorflow_datasets.core import dataset_builder
 import jax, flax, optax, ml_collections, functools
@@ -17,15 +17,20 @@ import tensorflow_datasets as tfds
 import defaults, objective, models, data, linear_evaluation
 import wandb
 
-def create_model(config: ml_collections.ConfigDict):
+def create_model(config: ml_collections.ConfigDict, axis_name: str = "batch"):
     is_tpu_platform = jax.local_devices()[0].platform == "tpu"
     if config.half_precision:
         model_dtype = jnp.bfloat16 if is_tpu_platform else jnp.float16
     else:
         model_dtype = jnp.float32
+    
     stem = getattr(models.stem, config.stem)
-    backbone = getattr(models.resnet, config.model)(stem = stem, dtype = model_dtype)
-    projector = getattr(models.projector, config.projector)(dtype = model_dtype)
+    
+    backbone = getattr(models.resnet, config.model)
+    backbone = backbone(stem = stem, dtype = model_dtype)
+    
+    projector = getattr(models.projector, config.projector)
+    projector = projector(dtype = model_dtype, axis_name = axis_name)
     assembly = models.projector.Assembly(backbone = backbone,
                                          projector = projector,
                                          dtype = model_dtype)
@@ -63,11 +68,29 @@ def prepare_batch(batch):
     xla_split_labels = labels.reshape((local_device_count, -1) + labels.shape[1:])
     return xla_split_images, xla_split_labels
 
-def create_input_iter(config, dataset_builder, is_training):
-  ds = data.get_dataset(dataset_builder, batch_size = config.batch_size, is_training = is_training, cache_dataset = config.cache_dataset)
-  it = map(prepare_batch, ds)
-  return it
+# def create_input_iter(config, dataset_builder, is_training):
+#   ds = data.get_dataset(dataset_builder, batch_size = config.batch_size, is_training = is_training, cache_dataset = config.cache_dataset)
+#   it = map(prepare_batch, ds)
+#   return it
 
+def create_input_iter(config, dataset_builder, is_training: bool, split: str = 'train'):
+  ds = data.get_dataset(dataset_builder, batch_size = config.batch_size, is_training = is_training, cache_dataset = config.cache_dataset)
+  dataset_iter = map(prepare_batch, ds)
+  
+  num_examples = dataset_builder.info.splits['train'].num_examples
+  steps_per_epoch = num_examples // config.batch_size
+  
+  num_steps = config.num_epochs * steps_per_epoch
+
+  def get_iterator():
+    def step_epoch(step):
+        epoch = step / steps_per_epoch
+        return epoch, step
+
+    step_epoch_iter = map(step_epoch, range(num_steps))
+    return zip(step_epoch_iter, dataset_iter)
+
+  return get_iterator
 
 class TrainState(train_state.TrainState):
     batch_stats: Any
@@ -140,7 +163,10 @@ def sync_batch_stats(state):
     return state.replace(batch_stats=cross_replica_mean(state.batch_stats))
 
 # axis_name = "batch"
-def train_step(state, device_id, images, labels, learning_rate_fn):
+def train_step(state: TrainState,
+               device_id: int, 
+               images, labels, 
+               learning_rate_fn: Callable):
     """Perform a single training step."""
 
     def loss_fn(params):
@@ -152,7 +178,7 @@ def train_step(state, device_id, images, labels, learning_rate_fn):
         all_encodings = jax.lax.all_gather(projections, axis_name = "batch")
         all_encodings = jnp.reshape(all_encodings, (-1, all_encodings.shape[-1]))
         loss, (align, unif) = objective.pytorch_ported_ntxent(all_encodings, temp = 0.5)
-        # loss, (align, unif) = objective.ntxent(device_id, projections, temp = 0.5)
+        # loss, (align, unif) = objective.ntxent(device_id, projections, temp = 0.5, axis_name = "batch")
         metrics = {
           "loss" : loss,
           "align" : align,
@@ -176,10 +202,10 @@ def train_step(state, device_id, images, labels, learning_rate_fn):
     )
     
     metrics['learning_rate'] = learning_rate_fn(step)
-    return new_state, lax.pmean(metrics, axis_name ="batch")
+    return new_state, lax.pmean(metrics, axis_name = "batch")
 
 def train_and_evaluate(config: ml_collections.ConfigDict) -> TrainState:
-  rng = random.PRNGKey(0)
+  key = random.PRNGKey(0)
 
   dataset_builder = tfds.builder(config.dataset)
   
@@ -189,15 +215,17 @@ def train_and_evaluate(config: ml_collections.ConfigDict) -> TrainState:
   steps_per_epoch    = num_examples // config.batch_size 
   base_learning_rate = config.learning_rate * config.batch_size / 256.
 
-  train_dataset = create_input_iter(config, dataset_builder, is_training = True)
+  train_iter = create_input_iter(config, dataset_builder, is_training = True)
+  linear_train_iter = create_input_iter(config.clf_config, dataset_builder, is_training = False)
 
-  assembly = create_model(config)
 
   learning_rate_fn = create_learning_rate_fn(
       config, base_learning_rate, steps_per_epoch)
 
+  subkey, key = random.split(key)
+  assembly = create_model(config, axis_name = "batch")
   state = create_train_state(
-      random.PRNGKey(0), config, assembly, image_shape, learning_rate_fn
+      subkey, config, assembly, image_shape, learning_rate_fn
   )
 
   step_offset = int(state.step)
@@ -210,28 +238,30 @@ def train_and_evaluate(config: ml_collections.ConfigDict) -> TrainState:
       axis_name="batch")
   
   num_steps = int(steps_per_epoch * config.num_epochs)
+
+
+  def linear_eval(key, step):
+    linear_metrics = linear_evaluation.evaluate(key, config.clf_config, jax_utils.unreplicate(state), 
+                                                  assembly, dataset_builder, linear_train_iter)
+    wandb.log({
+        "epoch" : (step + 1) / steps_per_epoch,
+        "train_linear_accuracy" : linear_metrics["max_accuracy"]
+      })
   
   logging.info('Compiling model')
-  for step, batch in zip(range(step_offset, num_steps), train_dataset):
+  for (epoch, step), batch in train_iter():
     train_metrics = []
     train_metrics_last_t = time.time()
     
     state, metrics = p_train_step(state, device_ids, *batch)
 
-    if (step + 1) % (steps_per_epoch * 5) == 0:
-      linear_metrics = linear_evaluation.evaluate(random.PRNGKey(step), config.clf_config, 
-                                                  jax_utils.unreplicate(state), assembly, dataset_builder)
-      wandb.log({
-        "epoch" : step / steps_per_epoch,
-        "linear_accuracy" : linear_metrics["max_accuracy"]
-      })
+    if (step + 1) % config.linear_eval_step_freq == 0:
+      subkey, key = random.split(key)
+      linear_eval(subkey, step)
     
     if (step + 1) % steps_per_epoch == 0:
-      epoch = step // steps_per_epoch
-
       # sync batch statistics across replicas
       state = sync_batch_stats(state)
-
 
     if step == step_offset:
       logging.info('Training')
@@ -254,3 +284,4 @@ def train_and_evaluate(config: ml_collections.ConfigDict) -> TrainState:
   jax.random.normal(jax.random.PRNGKey(0), ()).block_until_ready()
 
   return state
+

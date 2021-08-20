@@ -86,16 +86,18 @@ class ResNet(nn.Module):
   num_filters: int = 64
   dtype: Any = jnp.float32
   act: Callable = nn.relu
+  axis_name: str = None
 
   @nn.compact
   def __call__(self, x, train: bool = True):
-    stem = partial(self.stem, dtype=self.dtype)
+    stem = partial(self.stem, dtype=self.dtype, axis_name = self.axis_name)
     conv = partial(nn.Conv, use_bias=False, dtype=self.dtype)
     norm = partial(nn.BatchNorm,
                    use_running_average=not train,
-                   momentum=0.9,
+                   momentum=0.99,
                    epsilon=1e-5,
-                   dtype=self.dtype)
+                   dtype=self.dtype,
+                   axis_name=self.axis_name)
 
     x = stem()(x, train = train)
     for i, block_size in enumerate(self.stage_sizes):
