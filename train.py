@@ -68,29 +68,11 @@ def prepare_batch(batch):
     xla_split_labels = labels.reshape((local_device_count, -1) + labels.shape[1:])
     return xla_split_images, xla_split_labels
 
-# def create_input_iter(config, dataset_builder, is_training):
-#   ds = data.get_dataset(dataset_builder, batch_size = config.batch_size, is_training = is_training, cache_dataset = config.cache_dataset)
-#   it = map(prepare_batch, ds)
-#   return it
-
 def create_input_iter(config, dataset_builder, is_training: bool, split: str = 'train'):
   ds = data.get_dataset(dataset_builder, batch_size = config.batch_size, is_training = is_training, cache_dataset = config.cache_dataset)
   dataset_iter = map(prepare_batch, ds)
-  
-  num_examples = dataset_builder.info.splits['train'].num_examples
-  steps_per_epoch = num_examples // config.batch_size
-  
-  num_steps = config.num_epochs * steps_per_epoch
 
-  def get_iterator():
-    def step_epoch(step):
-        epoch = step / steps_per_epoch
-        return epoch, step
-
-    step_epoch_iter = map(step_epoch, range(num_steps))
-    return zip(step_epoch_iter, dataset_iter)
-
-  return get_iterator
+  return dataset_iter
 
 class TrainState(train_state.TrainState):
     batch_stats: Any
@@ -166,7 +148,8 @@ def sync_batch_stats(state):
 def train_step(state: TrainState,
                device_id: int, 
                images, labels, 
-               learning_rate_fn: Callable):
+               learning_rate_fn: Callable,
+               temp: float):
     """Perform a single training step."""
 
     def loss_fn(params):
@@ -175,10 +158,14 @@ def train_step(state: TrainState,
             {"params": params, "batch_stats": state.batch_stats},
             images, mutable=["batch_stats"],
         )
+        
         all_encodings = jax.lax.all_gather(projections, axis_name = "batch")
         all_encodings = jnp.reshape(all_encodings, (-1, all_encodings.shape[-1]))
-        loss, (align, unif) = objective.pytorch_ported_ntxent(all_encodings, temp = 0.5)
-        # loss, (align, unif) = objective.ntxent(device_id, projections, temp = 0.5, axis_name = "batch")
+        loss, (align, unif) = objective.pytorch_ported_ntxent(all_encodings, temp = temp)
+        
+        # parallel training, doesn't work :'(
+        # loss, (align, unif) = objective.ntxent(device_id, projections, temp = temp, axis_name = "batch")
+        
         metrics = {
           "loss" : loss,
           "align" : align,
@@ -214,6 +201,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict) -> TrainState:
   num_classes  = dataset_builder.info.features['label'].num_classes
   steps_per_epoch    = num_examples // config.batch_size 
   base_learning_rate = config.learning_rate * config.batch_size / 256.
+  num_steps = config.num_epochs * steps_per_epoch
 
   train_iter = create_input_iter(config, dataset_builder, is_training = True)
   linear_train_iter = create_input_iter(config.clf_config, dataset_builder, is_training = False)
@@ -222,6 +210,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict) -> TrainState:
   learning_rate_fn = create_learning_rate_fn(
       config, base_learning_rate, steps_per_epoch)
 
+  # initialise model
   subkey, key = random.split(key)
   assembly = create_model(config, axis_name = "batch")
   state = create_train_state(
@@ -230,11 +219,12 @@ def train_and_evaluate(config: ml_collections.ConfigDict) -> TrainState:
 
   step_offset = int(state.step)
 
+  # replicate parameters to xla devices
   state = jax_utils.replicate(state)
-
   device_ids = jnp.arange(jax.local_device_count())
+
   p_train_step = jax.pmap(
-      functools.partial(train_step, learning_rate_fn = learning_rate_fn),
+      functools.partial(train_step, temp = config.ntxent_temp, learning_rate_fn = learning_rate_fn),
       axis_name="batch")
   
   num_steps = int(steps_per_epoch * config.num_epochs)
@@ -249,7 +239,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict) -> TrainState:
       })
   
   logging.info('Compiling model')
-  for (epoch, step), batch in train_iter():
+  for step, batch in zip(range(num_steps), train_iter):
     train_metrics = []
     train_metrics_last_t = time.time()
     
