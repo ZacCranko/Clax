@@ -24,18 +24,7 @@ from absl import flags
 import sys
 import tensorflow.compat.v1 as tf
 
-
-# from absl import flags
-# FLAGS = flags.FLAGS
-# FLAGS(sys.argv)
-
-# flags.DEFINE_float(
-#     'color_jitter_strength', 1.0,
-#     'The strength of color jittering.')
-
-
 CROP_PROPORTION = 0.875  # Standard for ImageNet.
-
 
 def random_apply(func, p, x):
   """Randomly apply function func to x with probability p."""

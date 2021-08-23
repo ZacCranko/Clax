@@ -90,7 +90,6 @@ class ResNet(nn.Module):
 
   @nn.compact
   def __call__(self, x, train: bool = True):
-    stem = partial(self.stem, dtype=self.dtype, axis_name = self.axis_name)
     conv = partial(nn.Conv, use_bias=False, dtype=self.dtype)
     norm = partial(nn.BatchNorm,
                    use_running_average=not train,
@@ -98,8 +97,8 @@ class ResNet(nn.Module):
                    epsilon=1e-5,
                    dtype=self.dtype,
                    axis_name=self.axis_name)
-
-    x = stem()(x, train = train)
+    
+    x = self.stem(norm=norm, conv=conv)(x, train = train)
     for i, block_size in enumerate(self.stage_sizes):
       for j in range(block_size):
         strides = (2, 2) if i > 0 and j == 0 else (1, 1)

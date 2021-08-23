@@ -11,9 +11,10 @@ import jax
 if __name__ == "__main__":
   if jax.local_device_count() % 2 != 0:
     raise RuntimeError("An even number of XLA devices is required.")
-
-  wandb.init(project='jax', entity='zaccranko')
+  
   config = defaults.get_config()
+
+  wandb.init(project='jax', entity='zaccranko', config = config.to_dict())
   logging.set_verbosity(logging.INFO)
   
   print(config)

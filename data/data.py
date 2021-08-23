@@ -1,9 +1,13 @@
-# %%
+#%%
 from . import data_util
+# import data_util
+from tensorflow.python.data.ops.dataset_ops import Dataset
 import tensorflow.compat.v2 as tf
 
 import tensorflow_datasets as tfds
 import functools
+import time 
+from absl import logging
 
 def build_distributed_dataset(builder, batch_size, is_training, strategy,
                               topology):
@@ -146,3 +150,114 @@ def get_dataset(builder: tfds.core.DatasetBuilder,
   dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
   
   return dataset
+
+class DatasetIterator:
+  def __init__(self,  dataset_builder, dataset_iter, 
+               batch_size: int, split: str = 'train', 
+               num_steps: int = -1, num_epochs: int = -1, start_step: int = 0):
+    
+    if (num_steps <= 0 and num_epochs <= 0):
+      raise ValueError("Must supply a positive number of either steps or epochs")
+
+
+    self.dataset_builder = dataset_builder
+    self.dataset_iter = dataset_iter.__iter__()
+    self.batch_size = batch_size
+    
+    self.num_examples = dataset_builder.info.splits[split].num_examples
+    self.image_shape  = dataset_builder.info.features['image'].shape
+    self.num_classes  = dataset_builder.info.features['label'].num_classes
+    self.shape = (self.image_shape, self.num_classes)
+
+    self.steps_per_epoch = self.num_examples // self.batch_size 
+
+    self.num_steps  = num_steps if num_steps >0 else num_epochs * self.steps_per_epoch
+    self.num_epochs = self.num_steps // self.steps_per_epoch
+    
+    self.start_step = start_step 
+
+    if self.start_step >= self.num_steps:
+      raise ValueError(f"Must have start_step (got {self.start_step}) earlier than num_step (got {self.num_steps})")
+
+    # force call of self.reset() before iterating
+    self.global_step = num_steps
+    self.train_start_time = float('inf')
+    self.batch_start_time = float('inf')
+
+    # time metrics
+    self.batch_time = float('inf')
+    self.samples_per_second = float('inf')
+    self.seconds_per_epoch = float('inf')
+
+  def __len__(self):
+    return self.num_steps - self.start_step
+
+  def __iter__(self):
+    self._reset()
+    return self
+
+  def __call__(self, *, info: str = None):
+    if info is not None:
+        logging.info(info)
+    return self
+
+  def __next__(self):
+    if self.global_step == self.num_steps:
+      raise StopIteration
+    
+    self._update_time_metrics()  
+    self.global_step += 1
+    
+    return next(self.dataset_iter)
+
+  def _reset(self):
+    self.train_start_time = time.time()
+    self.batch_start_time = time.time()
+    self.global_step = self.start_step - 1 
+
+  def _update_time_metrics(self):
+    self.batch_time = time.time() - self.batch_start_time
+    self.batch_start_time = time.time()
+
+    self.samples_per_second = self.batch_size / self.batch_time
+    self.seconds_per_epoch = self.steps_per_epoch * self.batch_time
+
+  def get_time_metrics(self):
+    metrics = {
+      'batch_time ': self.batch_time, 
+      'batch_samples_per_second' : self.samples_per_second,
+      'batch_seconds_per_epoch' : self.seconds_per_epoch
+    }
+    return metrics
+  
+  def append_metrics(self, summary, prefix: str = ""):
+    summary[f"{prefix}epoch"] = self.get_epoch(float = True)
+    summary[f"{prefix}global_step"] = self.global_step
+
+    for k, v in self.get_time_metrics().items():
+      summary[f"{prefix}{k}"] = v
+
+    return summary
+
+  def is_epoch_start(self) -> bool: 
+    return self.is_freq(step_freq = self.steps_per_epoch)
+  
+  def is_train_start(self) -> bool:
+    return self.global_step == self.start_step
+
+  def get_epoch(self, *, float: bool = False) -> int:
+    if float:
+      return (self.global_step + 1) / self.steps_per_epoch
+    else:
+      return (self.global_step + 1) // self.steps_per_epoch
+
+
+  def is_freq(self, *, step_freq: int = -1, epoch_freq: int = -1, force_last: bool = False) -> bool:
+    if force_last and (self.global_step + 1 == self.num_steps):
+        return True 
+    elif step_freq > 0:
+      return self.global_step % step_freq == 0
+    elif epoch_freq > 0:
+      return self.get_epoch(float = False) % epoch_freq == 0
+    else:
+       raise ValueError(f"Must supply positive step_freq (got {step_freq}) or epoch_freq (got {epoch_freq})")

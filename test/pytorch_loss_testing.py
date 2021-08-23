@@ -38,7 +38,7 @@ for temp in jnp.linspace(0.1, 2, 5):
   t_loss = t_loss.item()
   (t_align, t_unif) = (pytorch_ntxent.alignment.item(), pytorch_ntxent.uniformity.item() * temp)
 
-  s_loss, (s_align, s_unif) = objective.pytorch_ported_ntxent(encodings, temp = temp)
+  s_loss, (s_align, s_unif) = objective.ntxent_single(encodings, temp = temp)
   p_loss, (p_align, p_unif) = p_ntxent(encodings, temp = temp)
 
   print(f"temp: {temp}")
@@ -60,7 +60,7 @@ for eps in jnp.linspace(1.0, 0.001, 5):
   t_loss = t_loss.item()
   (t_align, t_unif) = (pytorch_ntxent.alignment.item(), pytorch_ntxent.uniformity.item() * temp)
 
-  s_loss, (s_align, s_unif) = objective.pytorch_ported_ntxent(encodings, temp = temp)
+  s_loss, (s_align, s_unif) = objective.ntxent_single(encodings, temp = temp)
   p_loss, (p_align, p_unif) = p_ntxent(encodings, temp = temp)
 
   print(f"eps: {eps}")
