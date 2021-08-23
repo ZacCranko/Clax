@@ -97,11 +97,11 @@ def get_preprocess_fn(is_training, image_size, is_pretrain):
 #   return _input_fn
   
 def get_dataset(builder: tfds.core.DatasetBuilder, 
-                   batch_size: int, 
-                   is_training: bool = True,  
-                   train_mode: str = 'pretrain', 
-                   split: str = 'train',
-                   cache_dataset: bool = True):
+                batch_size: int, 
+                is_training: bool = True,  
+                train_mode: str = 'pretrain', 
+                split: str = 'train',
+                cache_dataset: bool = True):
 
   num_classes = builder.info.features['label'].num_classes
   image_size, _ , _ = builder.info.features['image'].shape
@@ -152,6 +152,7 @@ def get_dataset(builder: tfds.core.DatasetBuilder,
   return dataset
 
 class DatasetIterator:
+  " ``There's no kill quite like overkill.'' "
   def __init__(self,  dataset_builder, dataset_iter, 
                batch_size: int, split: str = 'train', 
                num_steps: int = -1, num_epochs: int = -1, start_step: int = 0):
@@ -251,12 +252,11 @@ class DatasetIterator:
     else:
       return (self.global_step + 1) // self.steps_per_epoch
 
-
   def is_freq(self, *, step_freq: int = -1, epoch_freq: int = -1, force_last: bool = False) -> bool:
     if force_last and (self.global_step + 1 == self.num_steps):
         return True 
     elif step_freq > 0:
-      return self.global_step % step_freq == 0
+      return (self.global_step + 1) % step_freq == 0
     elif epoch_freq > 0:
       return self.get_epoch(float = False) % epoch_freq == 0
     else:

@@ -86,7 +86,7 @@ def create_train_state(
     )
 
     if config.freeze_projector:
-        tx = optax.masked(tx, flax.core.freeze({"backbone" : True, "projector" : True}))
+        tx = optax.masked(tx, flax.core.freeze({"backbone" : False, "projector" : True}))
 
     state = TrainState.create(
         apply_fn=assembly.apply,
@@ -101,10 +101,10 @@ def create_train_state(
 
     return state
 
-import defaults 
-config = defaults.get_config()
-config.restore_projector = False
-config.freeze_projector = True
+# import defaults 
+# config = defaults.get_config()
+# config.restore_projector = False
+# config.freeze_projector = True
 
-assembly = create_assembly(config)
-state = create_train_state(random.PRNGKey(0), config, assembly, (32, 32 ,3), 0)
+# assembly = create_assembly(config)
+# state = create_train_state(random.PRNGKey(0), config, assembly, (32, 32 ,3), 0)

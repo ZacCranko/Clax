@@ -15,7 +15,7 @@ def save_projector(config: ml_collections.ConfigDict, state, desc = None, step: 
                               target = projector_params,
                               step = step,
                               prefix = prefix + "_",
-                              keep = 1)
+                              keep = 1, overwrite=True)
 
 def restore_projector(config: ml_collections.ConfigDict, state, desc = None):
   logging.info("Restoring the projector parameters")

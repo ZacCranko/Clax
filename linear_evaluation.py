@@ -34,8 +34,7 @@ def initialize(rng: random.PRNGKey, num_classes: int, num_features: int):
 def create_train_state(rng: random.PRNGKey, 
                        clf_config: ml_collections.ConfigDict, 
                        state, assembly, image_shape, 
-                       num_classes: int,
-                       learning_rate_fn):
+                       num_classes: int):
   
   params = flax.core.frozen_dict.freeze({"params" : state.params["backbone"], "batch_stats" : state.batch_stats["backbone"]})
   encod_state = EncoderState.create(apply_fn = assembly.backbone.apply, params = params)
@@ -43,13 +42,8 @@ def create_train_state(rng: random.PRNGKey,
   
   # initialise model
   clf, params = initialize(rng, num_classes, num_features)
-
-  # tx = optax.lars(
-  #       learning_rate=learning_rate_fn,
-  #       momentum=clf_config.momentum,
-  #       nesterov=True,
-  #   )
   tx = optax.adam(learning_rate=clf_config.learning_rate)
+
   clf_state = train_state.TrainState.create(apply_fn=clf.apply, params = params, tx=tx)
   return encod_state, clf_state
 
@@ -81,9 +75,8 @@ def fast_evaluate(rng: random.PRNGKey,
                   train_iter: data.DatasetIterator):
 
   # build the encoder state and deduce the number of features
-  learning_rate_fn = init.create_learning_rate_fn(clf_config, train_iter.steps_per_epoch)
   encod_state, clf_state = create_train_state(rng, clf_config, state, assembly, 
-                                              train_iter.image_shape, train_iter.num_classes, learning_rate_fn)
+                                              train_iter.image_shape, train_iter.num_classes)
 
   logging.info("Evaluating linear accuracy")
   
@@ -93,7 +86,7 @@ def fast_evaluate(rng: random.PRNGKey,
   l2coeff     = jax_utils.replicate(clf_config.l2coeff)
 
   train_metrics = []
-  for batch in train_iter(info = "Linear evaluation loop"):
+  for batch in train_iter(info = f"Linear evaluation (l2coeff = {clf_config.l2coeff})"):
     clf_state, metrics = train_step(encod_state, clf_state, l2coeff, *batch)
 
     if train_iter.is_epoch_start():
@@ -104,7 +97,6 @@ def fast_evaluate(rng: random.PRNGKey,
               for k, v in jax.tree_map(lambda x: x.mean(), get_train_metrics).items()
           }
       summary = train_iter.append_metrics(summary, prefix = "linear_eval.train_")
-      wandb.log(summary)
   
   train_metrics = jax.tree_map(lambda x: x.mean(), train_metrics)
   max_accuracy_epoch = jnp.argmax(jnp.array([x['accuracy'] for x in train_metrics]))
@@ -130,8 +122,7 @@ def grid_search_evaluate(key: random.PRNGKey,
   l2coeff_grid_search = jnp.linspace(start, stop, num = num)
 
   grid_search_metrics = {}
-  logging.info("Starting L2 coefficient grid search")
-  for coeff in l2coeff_grid_search:
+  for coeff in l2coeff_grid_search(info="L2 coefficient grid search"):
     key, subkey = random.split(key)
     _clf_config.l2coeff = coeff
     grid_search_metrics[f"l2coeff_{coeff}"] = fast_evaluate(subkey, _clf_config, state, assembly, train_iter)

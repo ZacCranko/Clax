@@ -135,7 +135,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict) -> init.TrainState:
       linear_eval(subkey, train_iter.get_epoch())
 
     if train_iter.is_freq(step_freq = config.save_projector_step_freq):
-      serialization.save_projector(config, jax_utils.unreplicate(state), step = train_iter.global_step)
+      serialization.save_projector(config, jax_utils.unreplicate(state), step = train_iter.global_step + 1)
 
     if train_iter.is_epoch_start():
       # sync batch statistics across replicas
