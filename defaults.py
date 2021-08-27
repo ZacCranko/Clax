@@ -36,9 +36,9 @@ def get_config() -> ml_collections.ConfigDict:
     config.projector = "CIFAR10Classifier"
 
     config.ntxent_temp = 0.5
-    config.ntxent_unif_coeff = 0.95
+    config.ntxent_unif_coeff = 1.0
 
-    config.learning_rate = 1.0
+    config.learning_rate = 1.5
     config.warmup_epochs = 10
     config.momentum = 0.9
     config.batch_size = 2048

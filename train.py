@@ -39,7 +39,7 @@ def train_step(state: init.CLTrainState,
                device_id: int, 
                images, labels,
                learning_rate_fn: Callable,
-               temp: float, axis_name: str):
+               temp: float, unif_coeff: float, axis_name: str):
     """Perform a single training step."""
 
     def loss_fn(params):
@@ -49,7 +49,7 @@ def train_step(state: init.CLTrainState,
             images, mutable=["batch_stats"],
         )
 
-        loss, (align, unif) = obj.ntxent(device_id, projections, temp = temp, axis_name = axis_name)
+        loss, (align, unif) = obj.ntxent(device_id, projections, temp = temp, unif_coeff = unif_coeff, axis_name = axis_name)
         metrics = {}
         
         # clf_metrics = obj.classification_metrics(logits = projections, labels = labels)
