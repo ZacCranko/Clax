@@ -1,47 +1,29 @@
-#%%
-import jax, flax, ml_collections
-import flax.training.checkpoints as checkpoints
-from absl import logging
+from typing import Tuple 
+import jax.random as random, flax, ml_collections
 
-def save_projector(config: ml_collections.ConfigDict, state, desc = None, step: int = -1):
-  projector_params = state.params['projector']
-  
-  name_components = [config.projector]
-  if desc is not None:
-    name_components.append(desc)
+from ml_collections import ConfigDict
+from flax.linen import Module 
+from data import TrainIterator
+import flax.training.checkpoints as chkp
+import init 
+# from init import create_assembly, create_train_state, create_learning_rate_fn
 
-  prefix = "-".join(name_components)
-  checkpoints.save_checkpoint(ckpt_dir = "checkpoints/projector",
-                              target = projector_params,
-                              step = step,
-                              prefix = prefix + "_",
-                              keep = 1, overwrite=True)
 
-def restore_projector(config: ml_collections.ConfigDict, state, desc = None):
-  logging.info("Restoring the projector parameters")
-  projector_params = state.params['projector']
-  
-  name_components = [config.projector]
-  if desc is not None:
-    name_components.append(desc)
+def create_train_state(config: ConfigDict, steps_per_epoch: int, image_shape: Tuple[int,int,int]):
+    assembly = init.create_assembly(config)
+    learning_rate_fn = init.create_learning_rate_fn(config, steps_per_epoch)
+    state = init.create_train_state(random.PRNGKey(0), config, assembly, image_shape, learning_rate_fn)
+    return assembly, state 
 
-  prefix = "-".join(name_components)
-  new_projector_params = checkpoints.restore_checkpoint(ckpt_dir = "checkpoints/projector", 
-                                                        target = projector_params,
-                                                        prefix = prefix + "_")
-  params = flax.core.unfreeze(state.params)
-  params['projector'] = flax.core.unfreeze(new_projector_params)
-  params = flax.core.freeze(params)
-  return state.replace(params = params)
-                            
-# if config.restore_projector:
-    # state = serialization.restore_projector(config, state = state)
 
-# return state
+def restore_checkpoint(config: ConfigDict, 
+                       dir: str, 
+                       train_iter: TrainIterator, step: int = None, _debug = False):
+    assembly, state = create_train_state(config, train_iter.steps_per_epoch, train_iter.image_shape)
 
-# import defaults, init
-# from jax import random
-# config = defaults.get_config()
-# assembly = init.create_assembly(config)
-# config.
-# state = init.create_train_state(random.PRNGKey(0), config, assembly, (32, 32 ,3), 0)
+    if _debug:
+      return assembly, state
+
+    state = chkp.restore_checkpoint(dir, state, step = step)
+
+    return assembly, state 

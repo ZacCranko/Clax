@@ -1,1 +1,2 @@
-from data.data import *
+from .data import *
+from .iterator import *

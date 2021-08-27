@@ -45,7 +45,7 @@ def ntxent_single(encodings, temp: float = 0.5, eps: float = 1e-4):
 
 def ntxent(device_id: int, 
            batch, 
-           temp: float = 0.5, 
+           temp: float = 0.5, unif_coeff: float = 1.0,
            axis_name: str = "batch", 
            min_norm: float = 1e-4):
            
@@ -69,9 +69,13 @@ def ntxent(device_id: int,
   xcor_corrected = jax.ops.index_update(xcor, diag_inds, -jnp.inf)
 
   unif = logsumexp(xcor_corrected, axis = -1).mean()
-  loss = align + unif
+  loss = align + unif_coeff * unif
 
   return loss, (-align * temp, -unif * temp)
+
+@jax.jit
+def accuracy(*, logits, labels):
+  return jnp.mean(jnp.argmax(logits, -1) == jnp.argmax(labels, -1))
 
 @jax.jit
 def classification_metrics(*, logits, labels):

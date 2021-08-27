@@ -6,11 +6,14 @@ from jax import random, numpy as jnp
 from flax.training import train_state
 from typing import Any, Callable
 
-import models, serialization
+import models
 
-class TrainState(train_state.TrainState):
+class CLTrainState(train_state.TrainState):
     batch_stats: Any
     dynamic_scale: flax.optim.DynamicScale
+    
+    def apply(self, x, train: bool = True):
+        return self.apply_fn(self.params, x, train = train)
 
 def create_assembly(config: ml_collections.ConfigDict, axis_name: str = "batch"):
     is_tpu_platform = jax.local_devices()[0].platform == "tpu"
@@ -50,13 +53,14 @@ def create_learning_rate_fn(
     warmup_fn = optax.linear_schedule(
         init_value=0.0,
         end_value=base_learning_rate,
-        transition_steps=config.warmup_epochs * steps_per_epoch,
+        transition_steps = config.warmup_epochs * steps_per_epoch,
     )
     
     cosine_epochs = max(config.num_epochs - config.warmup_epochs, 1)
 
     cosine_fn = optax.cosine_decay_schedule(
-        init_value=base_learning_rate, decay_steps=cosine_epochs * steps_per_epoch
+        init_value=base_learning_rate, 
+        decay_steps=cosine_epochs * steps_per_epoch
     )
 
     learning_rate_fn = optax.join_schedules(
@@ -68,7 +72,7 @@ def create_learning_rate_fn(
 
 def create_train_state(
     rng, config: ml_collections.ConfigDict, assembly, image_shape, learning_rate_fn
-) -> TrainState:
+) -> CLTrainState:
     """Create initial training state."""
     dynamic_scale = None
     platform = jax.local_devices()[0].platform
@@ -88,16 +92,13 @@ def create_train_state(
     if config.freeze_projector:
         tx = optax.masked(tx, flax.core.freeze({"backbone" : False, "projector" : True}))
 
-    state = TrainState.create(
+    state = CLTrainState.create(
         apply_fn=assembly.apply,
         params=params,
         batch_stats=batch_stats,
         tx=tx,
         dynamic_scale=dynamic_scale,
     )
-
-    if config.restore_projector:
-        state = serialization.restore_projector(config, state = state)
 
     return state
 
