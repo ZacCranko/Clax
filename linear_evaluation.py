@@ -72,11 +72,15 @@ def train_step(rep_encod_state: EncoderState,
     
     metrics = {'cross_entropy' : cross_entropy, 'accuracy' : acc}
 
-    params = clf_state.params['params']
-    l2reg = sum(obj.l2_reg(params[head], coeff) for head, coeff in l2coeffs.items())
+    params = jax.tree_leaves(clf_state.params['params'])
+    sum_l2_reg = sum([
+      jnp.sum(w ** 2) * coeff 
+      for w, coeff in zip(params, jnp.repeat(l2coeffs, 2))])
+    
+    metrics['l2reg'] = sum_l2_reg
 
-    loss = cross_entropy + l2reg
-   
+    loss = cross_entropy + sum_l2_reg
+
     return loss, metrics
 
   grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
@@ -130,34 +134,33 @@ def train_and_evaluate(encod_state: train_state.TrainState, clf_state: train_sta
   for batch in train_iter: 
     clf_state, metrics = train_step(encod_state, clf_state, l2coeffs, *batch)
 
-    if train_iter.is_epoch_end():
-      metrics_str = " ".join(f"{metric}: {val:.2e}" for metric,val in jax_utils.unreplicate(metrics).items())
-      logging.info(f"epoch {train_iter.get_epoch()} {metrics_str}")
+    # if train_iter.is_epoch_end():
+      # metrics_str = " ".join(f"{metric}: {val:.2e}" for metric,val in jax_utils.unreplicate(metrics).items())
+      # logging.info(f"epoch {train_iter.get_epoch()} {metrics_str}")
       
   test_metrics = compute_metrics(encod_state, clf_state, test_iter)
 
-  return test_metrics
+  return test_metrics, jax_utils.unreplicate(clf_state)
 
 def linear_accuracy(key: random.PRNGKey, config: ConfigDict, state: init.CLTrainState, 
                     assembly: flax.linen.Module, train_iter: data.TrainIterator, test_iter: data.TrainIterator,
-                    minl2coeff: float = 0, maxl2coeff: float = 0.01, num_steps: int = 10):
-
-  num_heads = num_steps
+                    minl2coeff: float = 0, maxl2coeff: float = 0.01, num_heads: int = 10):
   subkey, key = random.split(key)
-  
 
   encod_state, clf_state = create_train_state(subkey, config.clf_config, state, assembly,
                               train_iter.image_shape, train_iter.num_classes, num_heads)
   
-  keys = clf_state.params['params'].keys()
-  l2coeffs = flax.core.freeze({ head : l2coeff for head,l2coeff in zip(keys, jnp.linspace(minl2coeff, maxl2coeff, len(keys)))})
-  test_metrics = train_and_evaluate(encod_state, clf_state, train_iter, test_iter, l2coeffs)
+
+  l2coeffs = jnp.linspace(minl2coeff, maxl2coeff, num_heads)
+  
+  logging.info("Training classifier heads")
+  test_metrics, clf_state = train_and_evaluate(encod_state, clf_state, train_iter, test_iter, l2coeffs)
 
   logging.info("Linear training finished")
-  for coeff, acc in zip((jnp.linspace(minl2coeff, maxl2coeff, len(keys))), test_metrics["accuracy"]):
-    logging.info(f"l2coeff: {coeff:.2e}, accuracy: {acc:.2%}")
+  for head, (coeff, acc) in enumerate(zip(l2coeffs, test_metrics["accuracy"])):
+    logging.info(f"head_{head}: l2coeff: {coeff:.2e}, accuracy: {acc:.2%}")
 
-  max_metrics = tree_util.tree_map(jnp.max, test_metrics)
+  accuracy = jnp.max(test_metrics['accuracy'])
   
-  return max_metrics
+  return accuracy, test_metrics
 

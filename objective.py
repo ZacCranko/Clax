@@ -87,6 +87,8 @@ def classification_metrics(*, logits, labels):
 
 @jax.jit
 def l2_reg(params, coeff: float):
-  squared_params = tree_util.tree_map(lambda x: x*x, params)
-  sum = tree_util.tree_reduce(lambda x, y: jnp.sum(x) + jnp.sum(y), squared_params)
-  return coeff * sum
+  weight_penalty_params = jax.tree_leaves(params)
+  weight_l2 = sum([jnp.sum(x ** 2)
+                    for x in weight_penalty_params
+                    if x.ndim > 1])
+  return weight_l2 * coeff

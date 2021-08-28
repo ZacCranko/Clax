@@ -1,10 +1,12 @@
 #%%
+from typing import Any
+from ml_collections import ConfigDict
 
-import jax, flax, optax, ml_collections, functools
-
+import jax, flax, optax
 from jax import random, numpy as jnp
+from jax.random import PRNGKey
+
 from flax.training import train_state
-from typing import Any, Callable
 
 import models
 
@@ -15,7 +17,7 @@ class CLTrainState(train_state.TrainState):
     def apply(self, x, train: bool = True):
         return self.apply_fn(self.params, x, train = train)
 
-def create_assembly(config: ml_collections.ConfigDict, axis_name: str = "batch"):
+def create_assembly(config: ConfigDict, axis_name: str = "batch"):
     is_tpu_platform = jax.local_devices()[0].platform == "tpu"
     if config.half_precision:
         model_dtype = jnp.bfloat16 if is_tpu_platform else jnp.float16
@@ -34,7 +36,7 @@ def create_assembly(config: ml_collections.ConfigDict, axis_name: str = "batch")
                                          dtype = model_dtype)
     return assembly
 
-def initialized(rng: random.PRNGKey, image_shape: int, model):
+def initialized(rng: PRNGKey, image_shape: int, model):
     input_shape = (128, ) + image_shape
 
     @jax.jit
@@ -45,7 +47,7 @@ def initialized(rng: random.PRNGKey, image_shape: int, model):
     return variables["params"], variables["batch_stats"]
 
 def create_learning_rate_fn(
-    config: ml_collections.ConfigDict, steps_per_epoch: int
+    config: ConfigDict, steps_per_epoch: int
 ):
     base_learning_rate = config.learning_rate * config.batch_size / 256.
 
@@ -71,7 +73,7 @@ def create_learning_rate_fn(
     return learning_rate_fn
 
 def create_train_state(
-    rng, config: ml_collections.ConfigDict, assembly, image_shape, learning_rate_fn
+    rng, config: ConfigDict, assembly, image_shape, learning_rate_fn
 ) -> CLTrainState:
     """Create initial training state."""
     dynamic_scale = None

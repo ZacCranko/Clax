@@ -1,21 +1,22 @@
 # %% 1: Imports
-import os, sys, time
-from typing import Any, Callable, Dict
 from absl import logging 
 
-import jax, ml_collections, functools, optax
-import tensorflow_datasets as tfds
+from typing import Any, Callable, Dict
+from flax.training.train_state import TrainState
+from data.iterator import TrainIterator
+from ml_collections import ConfigDict
+from jax.random import PRNGKey
+
+import jax, functools
 
 from jax import numpy as jnp, lax
-from jax.random import PRNGKey
+
 from flax import jax_utils
-
-from flax.training import common_utils, checkpoints as chkp
+from flax.training import checkpoints as chkp
 from flax.metrics import tensorboard
-import linear_evaluation as eval
 
-
-import objective as obj, data, init
+import linear_evaluation as eval, objective as obj, data, init
+import wandb
 
 def get_key():
   global key
@@ -35,11 +36,12 @@ def sync_batch_stats(state):
     # we sync them before evaluation.
     return state.replace(batch_stats=cross_replica_mean(state.batch_stats))
 
-def train_step(state: init.CLTrainState,
+def train_step(state: TrainState,
                device_id: int, 
                images, labels,
                learning_rate_fn: Callable,
-               temp: float, unif_coeff: float, axis_name: str):
+               temp: float, unif_coeff: float, axis_name: str,
+               is_supervised: bool = False):
     """Perform a single training step."""
 
     def loss_fn(params):
@@ -48,16 +50,22 @@ def train_step(state: init.CLTrainState,
             {"params": params, "batch_stats": state.batch_stats},
             images, mutable=["batch_stats"],
         )
-
-        loss, (align, unif) = obj.ntxent(device_id, projections, temp = temp, unif_coeff = unif_coeff, axis_name = axis_name)
-        metrics = {}
         
-        # clf_metrics = obj.classification_metrics(logits = projections, labels = labels)
+        metrics = {}
+
+        ntxent, (align, unif) = obj.ntxent(device_id, projections, temp = temp, unif_coeff = unif_coeff, axis_name = axis_name)
+        loss = ntxent
+        
+        if is_supervised:
+          clf_metrics = obj.classification_metrics(logits = projections, labels = labels)
+          loss = clf_metrics['cross_entropy']
+          
+          for k,v in clf_metrics.items():
+            metrics[k] = v
 
         metrics['align'] = align
         metrics['unif'] = unif
-
-        # loss = metrics['cross_entropy']
+        metrics['ntxent'] = ntxent
 
         return loss, (new_model_state, metrics)
 
@@ -82,14 +90,14 @@ def save_checkpoint(workdir, state):
     step  = int(state.step)
     chkp.save_checkpoint(workdir, state, step, keep=5)
 
-def train_and_evaluate(_key: PRNGKey, config: ml_collections.ConfigDict, workdir: str) -> init.CLTrainState:
+def train_and_evaluate(_key: PRNGKey, config: ConfigDict, workdir: str) -> TrainState:
   global key 
   key = _key 
 
   summary_writer = SummaryWriter(workdir)
   summary_writer.hparams(config.to_dict())
 
-  train_iter = data.create_input_iter(config, is_training = True)
+  train_iter = data.create_input_iter(config, is_contrastive = True)
   
   learning_rate_fn = init.create_learning_rate_fn(config, train_iter.steps_per_epoch)
 
@@ -99,41 +107,47 @@ def train_and_evaluate(_key: PRNGKey, config: ml_collections.ConfigDict, workdir
       get_key(), config, assembly, train_iter.image_shape, learning_rate_fn
   )
 
-  linear_train_iter = data.create_input_iter(config.clf_config, is_training = False, dataset = config.dataset)
-  linear_test_iter  = data.create_input_iter(config.clf_config, is_training = False, dataset = config.dataset, split = 'test')
+  linear_train_iter = data.create_input_iter(config.clf_config, is_contrastive = False, dataset = config.dataset)
+  linear_test_iter  = data.create_input_iter(config.clf_config, is_contrastive = False, dataset = config.dataset, split = 'test')
 
   # replicate parameters to xla devices
-  rep_state = jax_utils.replicate(state)
+  state = jax_utils.replicate(state)
   device_ids = jnp.arange(jax.local_device_count())
 
   p_train_step = jax.pmap(
       functools.partial(train_step, 
-                        temp = config.ntxent_temp, unif_coeff = config.ntxent_unif_coeff,
+                        temp = config.ntxent_temp, 
+                        unif_coeff = config.ntxent_unif_coeff,
                         learning_rate_fn = learning_rate_fn, 
-                        axis_name = "batch"), 
+                        axis_name = "batch",
+                        is_supervised = config.is_supervised), 
       axis_name = "batch")
+
+  eval_linear_accuracy = functools.partial(eval.linear_accuracy, 
+    config = config, assembly = assembly, 
+    train_iter = linear_train_iter, test_iter = linear_test_iter, 
+    minl2coeff = config.clf_config.minl2coeff, 
+    maxl2coeff = config.clf_config.maxl2coeff, 
+    num_heads  = config.clf_config.num_heads)
 
   logging.info("Starting training")
   for batch in train_iter:
-    rep_state, metrics = p_train_step(rep_state, device_ids, *batch)
-    summary = {
-            f'train_{k}': v
-            for k, v in jax.tree_map(lambda x: x.mean(), metrics).items()
-        }
-    summary = train_iter.append_metrics(summary)
-    summary_writer.log(summary, train_iter.global_step)
+    state, metrics = p_train_step(state, device_ids, *batch)
+    wandb.log({"train" : jax.tree_map(lambda x: x.mean(), metrics)}, commit = False)
 
     # linear evaluation
     if train_iter.is_freq(step_freq = config.linear_eval_step_freq):
-      metrics = eval.linear_accuracy(get_key(), config, jax_utils.unreplicate(rep_state), assembly, linear_train_iter, linear_test_iter)
-      summary_writer.scalar("train_linear_accuracy", metrics["accuracy"], train_iter.global_step)
+      accuracy, eval_metrics = eval_linear_accuracy(key = get_key(), state = jax_utils.unreplicate(state))
 
-    # checkpoint model
+      wandb.log({'test' : {'linear_accuracy' : accuracy}}, commit = False)
+
     if train_iter.is_freq(step_freq = config.checkpoint_step_freq):
-      save_checkpoint(workdir, rep_state)
+      save_checkpoint(workdir, state)
+    
+    wandb.log(dict(), step = train_iter.global_step)
 
   # Wait until computations are done before exiting
   jax.random.normal(PRNGKey(0), ()).block_until_ready()
 
-  return rep_state
+  return state
 

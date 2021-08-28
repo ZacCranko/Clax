@@ -1,3 +1,4 @@
+from typing import Dict, Any
 import jax, ml_collections, logging, time
 import tensorflow as tf
 import tensorflow_datasets as tfds
@@ -32,9 +33,9 @@ def _local_device_split(batch):
 
   return jax.tree_map(_prepare, batch)
 
-def create_input_iter(config: ml_collections.ConfigDict, is_training: bool, split: str = 'train', dataset = None, aug_shape: str = 'striped'):
+def create_input_iter(config: ml_collections.ConfigDict, is_contrastive: bool, split: str = 'train', dataset = None, aug_shape: str = 'striped'):
   dataset_builder = tfds.builder(dataset if dataset is not None else config.dataset)
-  ds = data.get_dataset(dataset_builder, batch_size = config.batch_size, is_training = is_training, cache_dataset = config.cache_dataset)
+  ds = data.get_dataset(dataset_builder, batch_size = config.batch_size, is_contrastive = is_contrastive, cache_dataset = config.cache_dataset)
 
   ds = map(_to_numpy, ds)
   ds = map(_concat_augs_along_batch, ds)
@@ -131,16 +132,19 @@ class TrainIterator:
     else:
        raise ValueError(f"Must supply positive step_freq (got {step_freq}) or epoch_freq (got {epoch_freq})")
   
-  def get_time_metrics(self):
+  def get_metrics(self):
     metrics = {
-      'batch_seconds_per_batch': self.batch_time, 
-      'batch_images_per_second' : self.images_per_second,
-      'batch_seconds_per_epoch' : self.seconds_per_epoch
+      'epoch' : self.get_epoch(float = True),
+      'perf'  : {
+        'seconds_per_batch' : self.batch_time, 
+        'images_per_second' : self.images_per_second,
+        'seconds_per_epoch' : self.seconds_per_epoch
+      }
     }
     return metrics
   
-  def append_metrics(self, summary, prefix: str = ""):
-    for k, v in self.get_time_metrics().items():
+  def append_metrics(self, summary: Dict[str, Any], prefix: str = ""):
+    for k, v in self.get_metrics().items():
       summary[f"{prefix}{k}"] = v
 
     return summary
@@ -162,7 +166,7 @@ class TrainIterator:
   def is_train_start(self) -> bool:
     return self.global_step == self.start_step
 
-  def get_epoch(self, *, float: bool = False) -> int:
+  def get_epoch(self, *, float: bool = False) -> Any:
     if float:
       return (self.global_step + 1) / self.steps_per_epoch
     else:

@@ -7,18 +7,14 @@ def get_clf_config() -> ml_collections.ConfigDict:
     clf_config.learning_rate = 1e-3
     clf_config.batch_size = 1024
     clf_config.cache_dataset = True
-
     clf_config.start_step = 0
-    clf_config.num_epochs = 10
-
+    clf_config.num_epochs = 20
     clf_config.num_steps  = -1
 
-    # use the previous linear classifier to warm-start 
-    # linear evaluation
-    clf_config.warm_start = True
-
     # l2 regularizer coefficient
-    clf_config.l2coeff = 0
+    clf_config.minl2coeff = 0
+    clf_config.maxl2coeff = 5
+    clf_config.num_heads  = 10
 
     return clf_config
 
@@ -33,20 +29,24 @@ def get_config() -> ml_collections.ConfigDict:
 
     config.stem = "CIFAR"
     config.model = "ResNet50"
-    config.projector = "CIFAR10Classifier"
+    config.projector = "SimCLR"
+
+    # train with a supervised loss, make sure an appropriate projector
+    # is selected if setting this to True.
+    config.is_supervised = False
 
     config.ntxent_temp = 0.5
     config.ntxent_unif_coeff = 1.0
 
-    config.learning_rate = 1.5
+    config.learning_rate = 1.0
     config.warmup_epochs = 10
     config.momentum = 0.9
     config.batch_size = 2048
 
     # set either num_epochs or num_steps to a positive number
     config.start_step = 0
-    config.num_epochs = 200
-    config.num_steps = -1
+    config.num_epochs = 250
+    config.num_steps  = -1
 
     config.cache_dataset = True
     config.half_precision = False

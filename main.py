@@ -6,7 +6,6 @@ from ml_collections.config_flags import config_flags
 from datetime import datetime
 
 import wandb
-wandb.init(sync_tensorboard=True)
 
 FLAGS = flags.FLAGS
 config_flags.DEFINE_config_dict('config', defaults.get_config())
@@ -18,13 +17,16 @@ def get_workdir(*, logdir: str, name: str) -> str:
   return os.path.join(logdir, name)
 
 def main(argv):
-  wandb.config.update(FLAGS.config.to_dict())
+  if jax.process_index() == 0:
+    wandb.init()
+    wandb.config.update(FLAGS.config.to_dict())
+    wandb.config.seed = datetime.now().microsecond
 
   global key 
-  key = jax.random.PRNGKey(0)
-
+  key = jax.random.PRNGKey(wandb.config.seed)
   config = FLAGS.config
-  workdir = get_workdir(logdir = "tensorboard", name = wandb.run.name)
+
+  workdir = get_workdir(logdir = "checkpoints", name = wandb.run.name)
 
   train.train_and_evaluate(key, config, workdir = workdir)
 
