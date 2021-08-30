@@ -1,4 +1,5 @@
 from typing import Any, Callable, Tuple
+from data import TrainIterator
 from absl import logging
 
 import data
@@ -37,16 +38,16 @@ def initialized(rng, num_classes: int, num_features: int, num_heads: int):
 
 def create_train_state(rng: random.PRNGKey, 
                        clf_config: ConfigDict, 
-                       state, assembly, image_shape, 
-                       num_classes: int, num_heads: int):
+                       state, assembly, train_iter: TrainIterator):
   
   params = flax.core.frozen_dict.freeze({"params" : state.params["backbone"], "batch_stats" : state.batch_stats["backbone"]})
   encod_state = EncoderState.create(apply_fn = assembly.backbone.apply, params = params)
-  _, num_features = encod_state.apply(jnp.ones((128,) + image_shape), train = False).shape
+  _, num_features = encod_state.apply(jnp.ones((128,) + train_iter.image_shape), train = False).shape
   
   # initialise model
-  clf, params = initialized(rng, num_classes, num_features, num_heads)
-  tx = optax.adam(learning_rate=clf_config.learning_rate)
+  clf, params = initialized(rng, train_iter.num_classes, num_features, clf_config.num_heads)
+  
+  tx = optax.adam(clf_config.learning_rate)
 
   clf_state = train_state.TrainState.create(apply_fn=clf.apply, params=params, tx=tx)
   return encod_state, clf_state
@@ -125,7 +126,7 @@ def compute_metrics(rep_encod_state: train_state.TrainState,
   return metrics_by_head
 
 def train_and_evaluate(encod_state: train_state.TrainState, clf_state: train_state.TrainState, 
-                       train_iter: data.TrainIterator, test_iter: data.TrainIterator, l2coeffs):
+                       train_iter: data.TrainIterator, test_iter: data.TrainIterator, l2coeffs, debug: bool = False):
   
   encod_state = jax_utils.replicate(encod_state)
   clf_state = jax_utils.replicate(clf_state)
@@ -134,9 +135,9 @@ def train_and_evaluate(encod_state: train_state.TrainState, clf_state: train_sta
   for batch in train_iter: 
     clf_state, metrics = train_step(encod_state, clf_state, l2coeffs, *batch)
 
-    # if train_iter.is_epoch_end():
-      # metrics_str = " ".join(f"{metric}: {val:.2e}" for metric,val in jax_utils.unreplicate(metrics).items())
-      # logging.info(f"epoch {train_iter.get_epoch()} {metrics_str}")
+    if train_iter.is_epoch_end() and debug:
+      metrics_str = " ".join(f"{metric}: {val:.2e}" for metric,val in jax_utils.unreplicate(metrics).items())
+      logging.info(f"epoch {train_iter.get_epoch()} {metrics_str}")
       
   test_metrics = compute_metrics(encod_state, clf_state, test_iter)
 
@@ -144,17 +145,16 @@ def train_and_evaluate(encod_state: train_state.TrainState, clf_state: train_sta
 
 def linear_accuracy(key: random.PRNGKey, config: ConfigDict, state: init.CLTrainState, 
                     assembly: flax.linen.Module, train_iter: data.TrainIterator, test_iter: data.TrainIterator,
-                    minl2coeff: float = 0, maxl2coeff: float = 0.01, num_heads: int = 10):
+                    minl2coeff: float = 0, maxl2coeff: float = 0.01, num_heads: int = 10, debug: bool = False):
   subkey, key = random.split(key)
 
-  encod_state, clf_state = create_train_state(subkey, config.clf_config, state, assembly,
-                              train_iter.image_shape, train_iter.num_classes, num_heads)
+  encod_state, clf_state = create_train_state(subkey, config.clf_config, state, assembly, train_iter)
   
 
   l2coeffs = jnp.linspace(minl2coeff, maxl2coeff, num_heads)
   
   logging.info("Training classifier heads")
-  test_metrics, clf_state = train_and_evaluate(encod_state, clf_state, train_iter, test_iter, l2coeffs)
+  test_metrics, clf_state = train_and_evaluate(encod_state, clf_state, train_iter, test_iter, l2coeffs, debug = debug)
 
   logging.info("Linear training finished")
   for head, (coeff, acc) in enumerate(zip(l2coeffs, test_metrics["accuracy"])):
