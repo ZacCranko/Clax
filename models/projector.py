@@ -39,6 +39,18 @@ SimCLR = partial(MLP, stage_sizes=[2048, 128])
 
 CIFAR10Classifier = partial(MLP, stage_sizes=[10])
 
+Linear128 = partial(MLP, stage_sizes=[128])
+
+class Identity(nn.Module):
+  @nn.compact
+  def __call__(self, x, **kwargs):
+    return x 
+
+class Square(nn.Module):
+  @nn.compact
+  def __call__(self, x, **kwargs):
+    return nn.Dense(features = x.shape[-1], use_bias = True)(x)
+
 class Assembly(nn.Module):
     backbone: Any
     projector: Any
