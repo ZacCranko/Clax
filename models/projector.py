@@ -50,11 +50,17 @@ class LinearSame(nn.Module):
       return nn.Dense(features = x.shape[-1], use_bias = False)(x)
 
 class Identity(nn.Module):
+  dtype: Any = jnp.float32
+  axis_name: str = None
+
   @nn.compact
   def __call__(self, x, **kwargs):
     return x 
 
 class Square(nn.Module):
+  dtype: Any = jnp.float32
+  axis_name: str = None
+
   @nn.compact
   def __call__(self, x, **kwargs):
     return nn.Dense(features = x.shape[-1], use_bias = True)(x)
