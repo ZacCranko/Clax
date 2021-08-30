@@ -30,7 +30,7 @@ def main(argv):
     wandb.config.update(FLAGS.config.to_dict())
     wandb.config.seed = datetime.now().microsecond
     workdir = get_workdir(logdir = "checkpoints", name = wandb.run.name)
-    save_config(config, workdir)
+    save_config(FLAGS.config, workdir)
 
     train.train_and_evaluate(key, config, workdir = workdir)
 
