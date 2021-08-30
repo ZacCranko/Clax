@@ -34,8 +34,6 @@ def main(argv):
 
     train.train_and_evaluate(key, config, workdir = workdir)
 
-
-  global key 
   key = jax.random.PRNGKey(wandb.config.seed)
   config = FLAGS.config
 
