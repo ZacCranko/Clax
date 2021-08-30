@@ -41,6 +41,14 @@ CIFAR10Classifier = partial(MLP, stage_sizes=[10])
 
 Linear128 = partial(MLP, stage_sizes=[128])
 
+class LinearSame(nn.Module):
+  dtype: Any = jnp.float32
+  axis_name: str = None
+  
+  @nn.compact
+  def __call__(self, x, **kwargs):
+      return nn.Dense(features = x.shape[-1], use_bias = False)(x)
+
 class Identity(nn.Module):
   @nn.compact
   def __call__(self, x, **kwargs):
