@@ -90,9 +90,9 @@ def save_checkpoint(workdir, state):
     step  = int(state.step)
     chkp.save_checkpoint(workdir, state, step, keep=5)
 
-def train_and_evaluate(_key: PRNGKey, config: ConfigDict, workdir: str) -> TrainState:
+def train_and_evaluate(config: ConfigDict, workdir: str) -> TrainState:
   global key 
-  key = _key 
+  key = PRNGKey(config.seed)
 
   summary_writer = SummaryWriter(workdir)
   summary_writer.hparams(config.to_dict())

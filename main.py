@@ -15,10 +15,12 @@ config_flags.DEFINE_config_dict('config', defaults.get_config())
 
 logging.set_verbosity(logging.INFO)
 
+def save_config(config, logdir: str):
+  if not os.path.exists(logdir):
+    os.makedirs(logdir)
 
-def save_config(config: ConfigDict, logdir: str):
   with open(os.path.join(logdir, "config.json"), 'w+') as f:
-      json.dump(config.to_dict(), f, indent=4)
+    json.dump(dict(config), f, indent=4)
 
 def get_workdir(*, logdir: str, name: str) -> str:
   time_string = datetime.utcnow().replace(microsecond=0).isoformat().replace(":", "_")
@@ -29,14 +31,11 @@ def main(argv):
     wandb.init()
     wandb.config.update(FLAGS.config.to_dict())
     wandb.config.seed = datetime.now().microsecond
-    workdir = get_workdir(logdir = "checkpoints", name = wandb.run.name)
-    save_config(FLAGS.config, workdir)
 
-    train.train_and_evaluate(key, config, workdir = workdir)
-
-  key = jax.random.PRNGKey(wandb.config.seed)
-  config = FLAGS.config
-
+  workdir = get_workdir(logdir = "checkpoints", name = wandb.run.name)
+  save_config(wandb.config, workdir)
+  config = ConfigDict(dict(wandb.config))
+  train.train_and_evaluate(config, workdir = workdir)config
 
 if __name__ == '__main__':
   if jax.local_device_count() % 2 != 0:
