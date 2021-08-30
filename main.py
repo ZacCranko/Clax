@@ -35,7 +35,7 @@ def main(argv):
   workdir = get_workdir(logdir = "checkpoints", name = wandb.run.name)
   save_config(wandb.config, workdir)
   config = ConfigDict(dict(wandb.config))
-  train.train_and_evaluate(config, workdir = workdir)config
+  train.train_and_evaluate(config, workdir = workdir)
 
 if __name__ == '__main__':
   if jax.local_device_count() % 2 != 0:
