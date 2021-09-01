@@ -34,7 +34,8 @@ def get_dataset(builder: tfds.core.DatasetBuilder,
                 is_contrastive: bool = True,  
                 train_mode: str = 'pretrain', 
                 split: str = 'train',
-                cache_dataset: bool = True):
+                cache_dataset: bool = True,
+                num_aug: int = 1):
 
   num_classes = builder.info.features['label'].num_classes
   image_size, _ , _ = builder.info.features['image'].shape
@@ -44,15 +45,16 @@ def get_dataset(builder: tfds.core.DatasetBuilder,
 
   def map_fn(image, label):
     """Produces multiple transformations of the same batch."""
-    if is_contrastive and train_mode == 'pretrain':
-      xs = []
-      for _ in range(2):  
-        # Two transformations
-        xs.append(preprocess_fn_pretrain(image))
-        
-      image = tf.concat(xs, -1)
-    else:
-      image = preprocess_fn_finetune(image)
+    if num_aug != -1:
+      if is_contrastive and train_mode == 'pretrain':
+        xs = []
+        for _ in range(num_aug):  
+          # Two transformations
+          xs.append(preprocess_fn_pretrain(image))
+          
+        image = tf.concat(xs, -1)
+      else:
+        image = preprocess_fn_finetune(image)
     
     label = tf.one_hot(label, num_classes)
 
