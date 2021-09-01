@@ -1,0 +1,7 @@
+jax
+flax
+optax
+tensorflow_datasets
+ml_collections
+wandb
+

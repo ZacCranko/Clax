@@ -39,5 +39,5 @@ def main(argv):
 
 if __name__ == '__main__':
   if jax.local_device_count() % 2 != 0:
-    raise RuntimeError("An even number of XLA devices is required.")
+    raise RuntimeError(f"An even number of XLA devices is required (got {jax.local_device_count()} XLA devices: {jax.local_devices()})")
   app.run(main)

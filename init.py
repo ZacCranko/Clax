@@ -10,6 +10,7 @@ from jax import random, numpy as jnp
 from jax.random import PRNGKey
 
 from flax.training import train_state
+from flax.core import freeze, unfreeze
 import flax.training.checkpoints as chkp
 
 import models
@@ -96,7 +97,7 @@ def create_train_state(
     )
 
     if config.freeze_projector:
-        tx = optax.masked(tx, flax.core.freeze({"backbone" : True, "projector" : False}))
+        tx = optax.masked(tx, freeze({"backbone" : True, "projector" : False}))
 
     state = CLTrainState.create(
         apply_fn=assembly.apply,
@@ -107,23 +108,22 @@ def create_train_state(
     )
 
     if config.restore_projector != "":
-        run = config.restore_projector
+        logging.info(f"Restoring the projector parameters from {stored_run}")
 
-        logging.info(f"Restoring the projector parameters from {run}")
-        restored_state = chkp.restore_checkpoint(os.path.join(workdir, "..", run), state)
+        # if a full path is supplied, use that, otherwise treat it as the name of another run
+        stored_run = config.restore_projector
+        checkpoint_path = stored_run if os.path.isdir(stored_run) else os.path.join(workdir, "..", stored_run)
+        
+        stored_run_dict = chkp.restore_checkpoint(checkpoint_path, None)
+        stored_projector_params = stored_run_dict['params']['projector']
 
-        params = flax.core.unfreeze(state.params)
-        params['projector'] = restored_state.params['projector']
-        params = flax.core.freeze(params)
+        # sanity check to see if the stored run has the same parameters as the projector we have initialised
+        if state.params['projector'].keys() != stored_projector_params.keys():
+            raise ValueError(f"Config projector architecture ({config.projector}) does not match run {stored_run}")
 
-        state = state.replace(params = params)
+        params = unfreeze(state.params)
+        params['projector'] = stored_projector_params
+
+        state = state.replace(params = freeze(params))
 
     return state
-
-# import defaults 
-# config = defaults.get_config()
-# config.restore_projector = False
-# config.freeze_projector = True
-
-# assembly = create_assembly(config)
-# state = create_train_state(random.PRNGKey(0), config, assembly, (32, 32 ,3), 0)
