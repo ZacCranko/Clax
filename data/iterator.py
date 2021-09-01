@@ -35,6 +35,7 @@ def _local_device_split(batch):
 
 def create_input_iter(config: ml_collections.ConfigDict, is_contrastive: bool, split: str = 'train', dataset = None, aug_shape: str = 'striped'):
   dataset_builder = tfds.builder(dataset if dataset is not None else config.dataset)
+  dataset_builder.download_and_prepare()
   ds = data.get_dataset(dataset_builder, batch_size = config.batch_size, is_contrastive = is_contrastive, cache_dataset = config.cache_dataset)
 
   ds = map(_to_numpy, ds)
