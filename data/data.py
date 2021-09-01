@@ -31,30 +31,26 @@ def get_preprocess_fn(is_training, image_size, is_pretrain):
   
 def get_dataset(builder: tfds.core.DatasetBuilder, 
                 batch_size: int, 
-                is_contrastive: bool = True,  
-                train_mode: str = 'pretrain', 
+                shuffle_files: bool = True,  
+                is_pretrain: bool = True,
                 split: str = 'train',
                 cache_dataset: bool = True,
-                num_aug: int = 1):
+                num_aug: int = 2):
 
   num_classes = builder.info.features['label'].num_classes
   image_size, _ , _ = builder.info.features['image'].shape
   
-  preprocess_fn_pretrain = get_preprocess_fn(is_contrastive, image_size, is_pretrain=True)
-  preprocess_fn_finetune = get_preprocess_fn(is_contrastive, image_size, is_pretrain=False)
+  preprocess_fn = get_preprocess_fn(shuffle_files, image_size, is_pretrain=is_pretrain)
 
   def map_fn(image, label):
     """Produces multiple transformations of the same batch."""
     if num_aug != -1:
-      if is_contrastive and train_mode == 'pretrain':
-        xs = []
-        for _ in range(num_aug):  
-          # Two transformations
-          xs.append(preprocess_fn_pretrain(image))
-          
-        image = tf.concat(xs, -1)
-      else:
-        image = preprocess_fn_finetune(image)
+      xs = []
+      for _ in range(num_aug):  
+        # Two transformations
+        xs.append(preprocess_fn(image))
+        
+      image = tf.concat(xs, -1)
     
     label = tf.one_hot(label, num_classes)
 
@@ -62,7 +58,7 @@ def get_dataset(builder: tfds.core.DatasetBuilder,
 
   dataset = builder.as_dataset(
       split = split,
-      shuffle_files = is_contrastive,
+      shuffle_files = shuffle_files,
       as_supervised = True,
       # Passing the input_context to TFDS makes TFDS read different parts
       # of the dataset on different workers. We also adjust the interleave
@@ -73,7 +69,7 @@ def get_dataset(builder: tfds.core.DatasetBuilder,
           input_context=None))
   if cache_dataset:
     dataset = dataset.cache()
-  if is_contrastive:
+  if shuffle_files:
     options = tf.data.Options()
     options.experimental_deterministic = False
     options.experimental_slack = True
@@ -84,7 +80,7 @@ def get_dataset(builder: tfds.core.DatasetBuilder,
   dataset = dataset.repeat(-1)
   dataset = dataset.map(
       map_fn, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-  dataset = dataset.batch(batch_size, drop_remainder=is_contrastive)
+  dataset = dataset.batch(batch_size, drop_remainder=shuffle_files)
   dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
   
   return dataset

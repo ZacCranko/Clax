@@ -97,7 +97,7 @@ def train_and_evaluate(config: ConfigDict, workdir: str) -> TrainState:
   summary_writer = SummaryWriter(workdir)
   summary_writer.hparams(config.to_dict())
 
-  train_iter = data.create_input_iter(config, is_contrastive = True, num_transforms = 2)
+  train_iter = data.create_input_iter(config, shuffle_files = True, num_transforms = 2)
   
   learning_rate_fn = init.create_learning_rate_fn(config, train_iter.steps_per_epoch)
 
@@ -107,8 +107,8 @@ def train_and_evaluate(config: ConfigDict, workdir: str) -> TrainState:
       get_key(), config, assembly, train_iter.image_shape, learning_rate_fn, workdir
   )
 
-  linear_train_iter = data.create_input_iter(config.clf_config, is_contrastive = False, dataset = config.dataset, num_transforms = 1)
-  linear_test_iter  = data.create_input_iter(config.clf_config, is_contrastive = False, dataset = config.dataset, split = 'test', num_transforms = -1)
+  linear_train_iter = data.create_input_iter(config.clf_config, shuffle_files = False, dataset = config.dataset, num_transforms = 1)
+  linear_test_iter  = data.create_input_iter(config.clf_config, shuffle_files = False, dataset = config.dataset, split = 'test', num_transforms = -1)
 
   # replicate parameters to xla devices
   state = jax_utils.replicate(state)
