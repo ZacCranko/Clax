@@ -1,4 +1,7 @@
 #%%
+import os
+from absl import logging 
+
 from typing import Any
 from ml_collections import ConfigDict
 
@@ -7,6 +10,7 @@ from jax import random, numpy as jnp
 from jax.random import PRNGKey
 
 from flax.training import train_state
+import flax.training.checkpoints as chkp
 
 import models
 
@@ -73,7 +77,7 @@ def create_learning_rate_fn(
     return learning_rate_fn
 
 def create_train_state(
-    rng, config: ConfigDict, assembly, image_shape, learning_rate_fn
+    rng, config: ConfigDict, assembly, image_shape, learning_rate_fn, workdir: str
 ) -> CLTrainState:
     """Create initial training state."""
     dynamic_scale = None
@@ -92,7 +96,7 @@ def create_train_state(
     )
 
     if config.freeze_projector:
-        tx = optax.masked(tx, flax.core.freeze({"backbone" : False, "projector" : True}))
+        tx = optax.masked(tx, flax.core.freeze({"backbone" : True, "projector" : False}))
 
     state = CLTrainState.create(
         apply_fn=assembly.apply,
@@ -101,6 +105,18 @@ def create_train_state(
         tx=tx,
         dynamic_scale=dynamic_scale,
     )
+
+    if config.restore_projector != "":
+        run = config.restore_projector
+
+        logging.info(f"Restoring the projector parameters from {run}")
+        restored_state = chkp.restore_checkpoint(os.path.join(workdir, "..", run), state)
+
+        params = flax.core.unfreeze(state.params)
+        params['projector'] = restored_state.params['projector']
+        params = flax.core.freeze(params)
+
+        state = state.replace(params = params)
 
     return state
 

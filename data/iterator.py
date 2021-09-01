@@ -50,7 +50,7 @@ def create_input_iter(config: ml_collections.ConfigDict, is_contrastive: bool, s
   return dataset_iter
 
 class TrainIterator:
-  " ``There's no kill quite like overkill.'' "
+  """ ``There's no kill quite like overkill.'' """
   def __init__(self,  dataset_builder: tf.data.Dataset, dataset_iter, 
                batch_size: int, split: str = 'train', 
                num_steps: int = -1, num_epochs: int = -1, start_step: int = 0):
@@ -102,7 +102,7 @@ class TrainIterator:
     if self.global_step == self.num_steps:
       raise StopIteration
     
-    self._update_time_metrics()  
+    self.__update_time_metrics__()  
     self.global_step += 1
     
     return next(self.dataset_iter)
@@ -112,15 +112,16 @@ class TrainIterator:
     self.batch_start_time = time.time()
     self.global_step = self.start_step - 1 
 
-  def set_epochs(self, num_epochs: int):
-    self.num_steps = num_epochs * self.steps_per_epoch
 
-  def _update_time_metrics(self):
+  def __update_time_metrics__(self):
     self.batch_time = time.time() - self.batch_start_time
     self.batch_start_time = time.time()
 
     self.images_per_second = self.batch_size / self.batch_time
     self.seconds_per_epoch = self.steps_per_epoch * self.batch_time
+
+  def set_epochs(self, num_epochs: int):
+    self.num_steps = num_epochs * self.steps_per_epoch
  
   def is_freq(self, *, step_freq: int = -1, epoch_freq: int = -1, force_last: bool = False) -> bool:
     if force_last and (self.global_step + 1 == self.num_steps):

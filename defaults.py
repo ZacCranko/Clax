@@ -45,7 +45,7 @@ def get_config() -> ml_collections.ConfigDict:
 
     # set either num_epochs or num_steps to a positive number
     config.start_step = 0
-    config.num_epochs = 250
+    config.num_epochs = 300
     config.num_steps  = -1
 
     config.cache_dataset = True
@@ -58,9 +58,10 @@ def get_config() -> ml_collections.ConfigDict:
     config.log_every_steps = -1
 
     # set to -1 to disable
-    config.checkpoint_step_freq = 200
+    config.checkpoint_step_freq = 1000
+    config.num_checkpoints_to_keep = 10
 
-    config.restore_projector = False
+    config.restore_projector = ""
     config.freeze_projector = False
 
     return config

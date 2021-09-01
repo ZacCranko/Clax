@@ -83,12 +83,12 @@ def train_step(state: TrainState,
 
     return new_state, lax.pmean(metrics, axis_name = axis_name)
 
-def save_checkpoint(workdir, state):
+def save_checkpoint(config: ConfigDict, workdir: str, state: TrainState):
   if jax.process_index() == 0:
     # get train state from the first replica
     state = jax.device_get(jax_utils.unreplicate(state))
     step  = int(state.step)
-    chkp.save_checkpoint(workdir, state, step, keep=5)
+    chkp.save_checkpoint(workdir, state, step, keep=config.num_checkpoints_to_keep)
 
 def train_and_evaluate(config: ConfigDict, workdir: str) -> TrainState:
   global key 
@@ -104,7 +104,7 @@ def train_and_evaluate(config: ConfigDict, workdir: str) -> TrainState:
   # initialise model
   assembly = init.create_assembly(config, axis_name = "batch")
   state = init.create_train_state(
-      get_key(), config, assembly, train_iter.image_shape, learning_rate_fn
+      get_key(), config, assembly, train_iter.image_shape, learning_rate_fn, workdir
   )
 
   linear_train_iter = data.create_input_iter(config.clf_config, is_contrastive = False, dataset = config.dataset)
@@ -142,7 +142,7 @@ def train_and_evaluate(config: ConfigDict, workdir: str) -> TrainState:
       wandb.log({'test' : {'linear_accuracy' : accuracy}}, commit = False)
 
     if train_iter.is_freq(step_freq = config.checkpoint_step_freq):
-      save_checkpoint(workdir, state)
+      save_checkpoint(config, workdir, state)
     
     wandb.log(dict(), step = train_iter.global_step)
 
