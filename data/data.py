@@ -35,7 +35,7 @@ def get_dataset(builder: tfds.core.DatasetBuilder,
                 is_pretrain: bool = True,
                 split: str = 'train',
                 cache_dataset: bool = True,
-                num_aug: int = 2):
+                num_transforms: int = 2):
 
   num_classes = builder.info.features['label'].num_classes
   image_size, _ , _ = builder.info.features['image'].shape
@@ -44,9 +44,9 @@ def get_dataset(builder: tfds.core.DatasetBuilder,
 
   def map_fn(image, label):
     """Produces multiple transformations of the same batch."""
-    if num_aug != -1:
+    if num_transforms != -1:
       xs = []
-      for _ in range(num_aug):  
+      for _ in range(num_transforms):  
         # Two transformations
         xs.append(preprocess_fn(image))
         
