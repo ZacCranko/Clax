@@ -33,7 +33,7 @@ def _local_device_split(batch):
 
   return jax.tree_map(_prepare, batch)
 
-def create_input_iter(config: ml_collections.ConfigDict, shuffle_files: bool, split: str = 'train', dataset = None, num_transforms: int = 1):
+def create_input_iter(config: ml_collections.ConfigDict, shuffle_files: bool = True, split: str = 'train', dataset = None, num_transforms: int = 1):
   dataset_builder = tfds.builder(dataset if dataset is not None else config.dataset)
   dataset_builder.download_and_prepare()
   ds = data.get_dataset(dataset_builder, batch_size = config.batch_size, shuffle_files = shuffle_files, cache_dataset = config.cache_dataset, num_transforms = num_transforms)
