@@ -85,8 +85,6 @@ dummy = random.normal(key, (8 * 128, 2048))
 
 jax.device_put_replicated(params, jax.local_devices())
 
-cross_entropy()
-
 ##
 
 
