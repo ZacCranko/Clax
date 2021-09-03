@@ -10,6 +10,8 @@ import data
 import init, models, objective as obj
 
 import jax, optax
+
+# jax imports
 from jax import random, numpy as jnp, tree_util
 import jax.scipy.optimize as opt
 from jax.numpy import ndarray
@@ -30,7 +32,7 @@ class EncoderState(struct.PyTreeNode):
     params: flax.core.FrozenDict[str, Any]
 
     def apply(self, x):
-        return self.apply_fn(self.params, x, train=True, mutable=False)
+        return self.apply_fn(self.params, x, train=False, mutable=False)
 
     @classmethod
     def create(cls, **kwargs):
@@ -61,11 +63,16 @@ def unconcat_params(param_vector, params_shape, params_tree):
     return params
 
 
-def process_dataset(encod_state, dataset_iter, callback: Any = None):
-    @jax.pmap
-    def encode(encod_state, batch_images):
-        return encod_state.apply(batch_images, train=False)
+@jax.pmap
+def encode(encod_state: EncoderState, batch_images: ndarray):
+    return encod_state.apply_fn(
+        encod_state.params, batch_images, train=False, mutable=False
+    )
 
+
+def process_dataset(
+    encod_state: EncoderState, dataset_iter: TrainIterator, callback: Any = None
+):
     encod_state = jax_utils.replicate(encod_state)
     encodings = []
     labels = []
@@ -93,7 +100,13 @@ v_softmax_cross_entropy = jax.vmap(optax.softmax_cross_entropy)
 v_accuracy = jax.vmap(obj.accuracy)
 
 
-def evaluate_dataset(encod_state, clf_apply, params, test_iter):
+def evaluate_dataset(
+    encod_state: EncoderState,
+    clf_apply: Callable,
+    params,
+    test_iter: TrainIterator,
+    num_heads: int,
+):
     @jax.pmap
     def compute_accuracy(encodings, labels, params):
         logits = clf_apply(params, encodings)
@@ -121,17 +134,20 @@ def train_and_evaluate(
     train_iter: TrainIterator,
     test_iter: TrainIterator,
     *,
+    l2coeff_min=0,
+    l2coeff_max=0.5,
     num_heads: int = 1,
+    **lbfgs_kwargs,
 ) -> ndarray:
+    logging.info("Starting linear evluation")
     encodings, labels = process_dataset(encod_state, train_iter)
     input_dim = encodings.shape[-1]
     num_classes = labels.shape[-1]
 
-    ##
     clf_apply, params = create_and_initialise(key, input_dim, num_classes, num_heads)
-    initial_params, (params_shape, params_tree) = concat_params(params)
+    initial_params, shape_tree = concat_params(params)
 
-    @functools.partial(jax.jit, static_argnums=[1, 2])
+    @functools.partial(jax.jit, static_argnums=[1])
     def loss_fn(
         params: Any,
         num_heads: int,
@@ -149,27 +165,29 @@ def train_and_evaluate(
         l2norms = jax.tree_map(lambda x: jnp.sum(x ** 2), jax.tree_flatten(params)[0])
         reg = sum([norm * coeff for norm, coeff in zip(l2norms, l2coeffs)])
 
-        return loss + l2coeff * reg
+        return loss + reg
 
-    # repeat 2x for bias/weight layers
-    l2coeffs = jnp.repeat(jnp.linspace(0, 1, num_heads), 2)
+    # repeat twice for bias & weight layers
+    l2coeffs = jnp.repeat(jnp.linspace(l2coeff_min, l2coeff_max, num_heads), 2)
 
     @jax.value_and_grad
     def _loss_value_and_grad(params_vector):
-        params = unconcat_params(params_vector, params_shape, params_tree)
+        params = unconcat_params(params_vector, *shape_tree)
         return loss_fn(params, num_heads, l2coeffs, encodings, labels)
 
     loss_value_and_grad = jax.jit(_loss_value_and_grad)
 
     logging.info(f"Training classifiers")
     result = tfp.optimizer.lbfgs_minimize(
-        loss_value_and_grad, initial_position=initial_params, tolerance=1e-4
+        loss_value_and_grad, initial_position=initial_params, **lbfgs_kwargs
     )
 
-    params = unconcat_params(result.position, params_shape, params_tree)
+    print(result)
 
-    accuracy_by_head = evaluate_dataset(encod_state, clf_apply, params, test_iter)
-
+    params = unconcat_params(result.position, *shape_tree)
+    accuracy_by_head = evaluate_dataset(
+        encod_state, clf_apply, params, test_iter, num_heads
+    )
     return accuracy_by_head
 
 
@@ -179,6 +197,9 @@ import defaults, init, os
 
 config = defaults.get_config()
 train_iter = data.create_input_iter(config.clf_config, dataset="cifar10")
+train_iter.set_epochs(1)
+test_iter = data.create_input_iter(config.clf_config, dataset="cifar10", split="test")
+test_iter.set_epochs(1)
 key = random.PRNGKey(0)
 num_heads = 3
 num_classes = 10
@@ -190,53 +211,12 @@ encod_state = init.restore_encoder_state(
 )
 
 ##
-encodings, labels = process_dataset(encod_state, train_iter)
-input_dim = encodings.shape[-1]
-num_classes = labels.shape[-1]
-
-##
-clf_apply, params = create_and_initialise(key, input_dim, num_classes, num_heads)
-initial_params, (params_shape, params_tree) = concat_params(params)
-
-
-@functools.partial(jax.jit, static_argnums=[1, 2])
-def loss_fn(
-    params: Any,
-    num_heads: int,
-    l2coeffs: ndarray,
-    encodings: ndarray,
-    labels: ndarray,
-):
-    logits = clf_apply(params, encodings)
-
-    logits_by_head = logits.reshape(num_heads, -1, labels.shape[-1])
-    labels_by_head = jnp.tile(labels, (num_heads, 1, 1))
-
-    loss = v_softmax_cross_entropy(logits_by_head, labels_by_head).sum(0).mean()
-
-    l2norms = jax.tree_map(lambda x: jnp.sum(x ** 2), jax.tree_flatten(params)[0])
-    reg = sum([norm * coeff for norm, coeff in zip(l2norms, l2coeffs)])
-
-    return loss + l2coeff * reg
-
-
-# repeat 2x for bias/weight layers
-l2coeffs = jnp.repeat(jnp.linspace(0, 1, num_heads), 2)
-
-
-@jax.value_and_grad
-def _loss_value_and_grad(params_vector):
-    params = unconcat_params(params_vector, params_shape, params_tree)
-    return loss_fn(params, num_heads, l2coeffs, encodings, labels)
-
-
-loss_value_and_grad = jax.jit(_loss_value_and_grad)
-
-logging.info(f"Training classifiers")
-result = tfp.optimizer.lbfgs_minimize(
-    loss_value_and_grad, initial_position=initial_params, tolerance=1e-4
+logging.set_verbosity(logging.INFO)
+acc = train_and_evaluate(
+    key,
+    encod_state,
+    train_iter,
+    test_iter,
+    num_heads=num_heads,
+    max_iterations=500,
 )
-
-params = unconcat_params(result.position, params_shape, params_tree)
-
-accuracy_by_head = evaluate_dataset(encod_state, clf_apply, params, test_iter)
