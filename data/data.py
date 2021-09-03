@@ -51,7 +51,7 @@ def get_dataset(
     def map_fn(image, label):
         """Produces multiple transformations of the same batch."""
         if num_transforms != -1:
-            xs = [], ys = []
+            xs = []
             for _ in range(num_transforms):
                 # Two transformations
                 xs.append(preprocess_fn(image))
