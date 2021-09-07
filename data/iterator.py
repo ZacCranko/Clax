@@ -1,4 +1,5 @@
 from typing import Dict, Any
+from venv import create
 import jax, ml_collections, logging, time
 import tensorflow as tf
 import tensorflow_datasets as tfds
@@ -37,20 +38,44 @@ def _local_device_split(batch):
     return jax.tree_map(_prepare, batch)
 
 
-def create_input_iter(
+def config_create_input_iter(
     config: ml_collections.ConfigDict,
-    shuffle_files: bool = True,
+    is_pretrain: bool = True,
     split: str = "train",
     dataset=None,
     num_transforms: int = 1,
 ):
-    dataset_builder = tfds.builder(dataset if dataset is not None else config.dataset)
+    return create_input_iter(
+        dataset=config.dataset if dataset is None else dataset,
+        batch_size=config.batch_size,
+        num_epochs=config.num_epochs,
+        is_pretrain=is_pretrain,
+        split=split,
+        num_transforms=num_transforms,
+    )
+
+
+def create_input_iter(
+    dataset: str,
+    *,
+    batch_size: int,
+    num_steps: int = -1,
+    num_epochs: int = -1,
+    start_step: int = 0,
+    is_pretrain: bool = True,
+    cache_dataset: bool = True,
+    shuffle_files: bool = True,
+    split: str = "train",
+    num_transforms: int = 1,
+):
+    dataset_builder = tfds.builder(dataset)
     dataset_builder.download_and_prepare()
     ds = data.get_dataset(
         dataset_builder,
-        batch_size=config.batch_size,
+        batch_size=batch_size,
         shuffle_files=shuffle_files,
-        cache_dataset=config.cache_dataset,
+        is_pretrain=is_pretrain,
+        cache_dataset=cache_dataset,
         num_transforms=num_transforms,
     )
 
@@ -61,11 +86,11 @@ def create_input_iter(
     dataset_iter = TrainIterator(
         dataset_builder=dataset_builder,
         dataset_iter=ds,
-        batch_size=config.batch_size,
+        batch_size=batch_size,
         split=split,
-        num_steps=config.num_steps,
-        num_epochs=config.num_epochs,
-        start_step=config.start_step,
+        num_steps=num_steps,
+        num_epochs=num_epochs,
+        start_step=start_step,
     )
 
     if split == "test":

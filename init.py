@@ -14,7 +14,7 @@ from flax.core import freeze, unfreeze
 import flax.training.checkpoints as chkp
 
 import models
-from linear_evaluation import EncoderState
+from linear_evaluation_lbfgs import EncoderState
 
 
 class CLTrainState(train_state.TrainState):

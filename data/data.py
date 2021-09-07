@@ -33,6 +33,7 @@ def get_preprocess_fn(is_training, image_size, is_pretrain):
 
 def get_dataset(
     builder: tfds.core.DatasetBuilder,
+    *,
     batch_size: int,
     shuffle_files: bool = True,
     is_pretrain: bool = True,

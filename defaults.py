@@ -1,5 +1,6 @@
 import ml_collections
 
+
 def get_clf_config() -> ml_collections.ConfigDict:
     """Get the default hyperparameter configuration."""
     clf_config = ml_collections.ConfigDict()
@@ -8,15 +9,16 @@ def get_clf_config() -> ml_collections.ConfigDict:
     clf_config.batch_size = 1024
     clf_config.cache_dataset = True
     clf_config.start_step = 0
-    clf_config.num_epochs = 20
-    clf_config.num_steps  = -1
+    clf_config.num_epochs = 1
+    clf_config.num_steps = -1
 
     # l2 regularizer coefficient
-    clf_config.minl2coeff = 0
-    clf_config.maxl2coeff = 5
-    clf_config.num_heads  = 10
+    clf_config.minl2coeff = 0.0
+    clf_config.maxl2coeff = 1e-3
+    clf_config.num_heads = 10
 
     return clf_config
+
 
 def get_config() -> ml_collections.ConfigDict:
     config = ml_collections.ConfigDict()
@@ -46,11 +48,11 @@ def get_config() -> ml_collections.ConfigDict:
     # set either num_epochs or num_steps to a positive number
     config.start_step = 0
     config.num_epochs = 300
-    config.num_steps  = -1
+    config.num_steps = -1
 
     config.cache_dataset = True
     config.half_precision = False
-    
+
     config.linear_eval_step_freq = 200
 
     config.num_train_steps = -1
