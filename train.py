@@ -63,7 +63,7 @@ def train_step(
             mutable=["batch_stats"],
         )
 
-        metrics = {}
+        metrics = dict()
 
         ntxent, (align, unif) = obj.ntxent(
             device_id,
@@ -140,7 +140,7 @@ def train_and_evaluate(config: ConfigDict, workdir: str) -> TrainState:
     )
 
     # replicate parameters to xla devices
-    state = jax_utils.replicate(state)
+    state_repl = jax_utils.replicate(state)
     device_ids = jnp.arange(jax.local_device_count())
 
     p_train_step = jax.pmap(
@@ -155,55 +155,38 @@ def train_and_evaluate(config: ConfigDict, workdir: str) -> TrainState:
         axis_name="batch",
     )
 
-    # eval_linear_accuracy = functools.partial(eval.linear_accuracy,
-    #   config = config, assembly = assembly,
-    #   train_iter = linear_train_iter, test_iter = linear_test_iter,
-    #   minl2coeff = config.clf_config.minl2coeff,
-    #   maxl2coeff = config.clf_config.maxl2coeff,
-    #   num_heads  = config.clf_config.num_heads)
-    def eval_linear_accuracy(state):
-        encod_state = init.create_encoder_state(state, assembly)
+
+    def eval_linear_accuracy(state_repl):
         return lbfgs_eval.train_and_evaluate(
             get_key(),
-            encod_state,
+            state_repl,
             linear_train_iter,
             linear_test_iter,
             minl2coeff=config.clf_config.minl2coeff,
             maxl2coeff=config.clf_config.maxl2coeff,
-            num_heads=config.clf_config.num_heads,
+            num_heads=1,
         )
-
-    # eval_linear_accuracy = functools.partial(
-    #     eval.linear_accuracy,
-    #     config=config,
-    #     assembly=assembly,
-    #     train_iter=linear_train_iter,
-    #     test_iter=linear_test_iter,
-    #     minl2coeff=config.clf_config.minl2coeff,
-    #     maxl2coeff=config.clf_config.maxl2coeff,
-    #     num_heads=config.clf_config.num_heads,
-    # )
 
     logging.info("Starting training")
     for batch in train_iter:
-        state, metrics = p_train_step(state, device_ids, *batch)
+        state_repl, metrics = p_train_step(state_repl, device_ids, *batch)
         wandb.log({"train": jax.tree_map(lambda x: x.mean(), metrics)}, commit=False)
 
         # linear evaluation
         if train_iter.is_freq(step_freq=config.linear_eval_step_freq):
             # accuracy, eval_metrics = eval_linear_accuracy(
-            #     key=get_key(), state=jax_utils.unreplicate(state)
+            #     key=get_key(), state_repl=jax_utils.unreplicate(state_repl)
             # )
-            accuracy = eval_linear_accuracy(jax_utils.unreplicate(state))
+            state_repl, accuracy = eval_linear_accuracy(state_repl)
 
             wandb.log({"test": {"linear_accuracy": accuracy}}, commit=False)
 
         if train_iter.is_freq(step_freq=config.checkpoint_step_freq):
-            save_checkpoint(config, workdir, state)
+            save_checkpoint(config, workdir, jax_utils.unreplicate(state_repl))
 
         wandb.log(dict(), step=train_iter.global_step)
 
     # Wait until computations are done before exiting
     jax.random.normal(PRNGKey(0), ()).block_until_ready()
 
-    return state
+    return jax_utils.unreplicate(state_repl)

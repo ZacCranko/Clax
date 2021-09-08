@@ -31,7 +31,7 @@ else:
 
 image_shape = (32,32,3)
 assembly = init.create_assembly(config)
-params, batch_stats = init.initialized(rng, image_shape, assembly)
+params, batch_stats = init.initialise_assembly(rng, image_shape, assembly)
 learning_rate_fn = init.create_learning_rate_fn(config, 200)
 tx = optax.lars(
     learning_rate=learning_rate_fn,

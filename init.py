@@ -2,24 +2,35 @@
 import os
 from absl import logging
 
-from typing import Any
+from typing import Any, Callable, Tuple
 from ml_collections import ConfigDict
 
 import jax, flax, optax
 from jax import random, numpy as jnp
-from jax.random import PRNGKey
+from flax.linen import Module
+from jax.numpy import ndarray
 
 from flax.training import train_state
 from flax.core import freeze, unfreeze
+from flax import struct
 import flax.training.checkpoints as chkp
 
 import models
-from linear_evaluation_lbfgs import EncoderState
 
 
 class CLTrainState(train_state.TrainState):
+    backbone_apply_fn: Callable = struct.field(pytree_node=False)
     batch_stats: Any
-    dynamic_scale: flax.optim.DynamicScale
+    
+    clf_heads_apply_fn: Callable = struct.field(pytree_node=False)
+    clf_heads_params: Any
+
+    def encode(self, x, train: bool = False):
+        params = dict(params=self.params["backbone"], batch_stats = self.batch_stats["backbone"])
+        return self.backbone_apply_fn(params, x, train = train, mutable=False)
+
+    def classify(self, encodings, train: bool = False):
+        return self.clf_heads_apply_fn(dict(params=self.clf_heads_params), encodings)
 
     def apply(self, x, train: bool = True):
         return self.apply_fn(self.params, x, train=train)
@@ -45,15 +56,15 @@ def create_assembly(config: ConfigDict, axis_name: str = "batch"):
     return assembly
 
 
-def initialized(rng: jnp.ndarray, image_shape: int, model):
+def initialise_assembly(key: jnp.ndarray, image_shape: Tuple[int,int,int], model: Module):
     input_shape = (128,) + image_shape
 
     @jax.jit
     def init(*args):
         return model.init(*args)
 
-    variables = init(rng, jnp.ones(input_shape, model.dtype))
-    return variables["params"], variables["batch_stats"]
+    variables = init(key, jnp.ones(input_shape, model.dtype))
+    return variables
 
 
 def create_learning_rate_fn(config: ConfigDict, steps_per_epoch: int):
@@ -79,19 +90,25 @@ def create_learning_rate_fn(config: ConfigDict, steps_per_epoch: int):
 
     return learning_rate_fn
 
+def initialise_linear_clf_heads(
+    key: ndarray, input_dim: int, num_classes: int, num_heads: int = 10
+):
+    clf = models.classifier.MutiHeadClassifier(
+        num_heads=num_heads, num_classes=num_classes
+    )
+    params = clf.init(key, jnp.ones((0, input_dim)))
+    return clf.apply, params
 
 def create_train_state(
-    rng, config: ConfigDict, assembly, image_shape, learning_rate_fn, workdir: str
+    key, config: ConfigDict, assembly, image_shape,learning_rate_fn, workdir: str
 ) -> CLTrainState:
     """Create initial training state."""
-    dynamic_scale = None
-    platform = jax.local_devices()[0].platform
-    if config.half_precision and platform == "gpu":
-        dynamic_scale = flax.optim.DynamicScale()
-    else:
-        dynamic_scale = None
+    # dynamic_scale = Noneå
+    # platform = jax.local_devices()[0].platform
 
-    params, batch_stats = initialized(rng, image_shape, assembly)
+    assembly_params = initialise_assembly(key, image_shape, assembly)
+
+    clf_heads_apply_fn, clf_heads_params = initialise_linear_clf_heads(key, input_dim = 2048, num_classes = 10, num_heads = 1)
 
     tx = optax.lars(
         learning_rate=learning_rate_fn,
@@ -104,10 +121,12 @@ def create_train_state(
 
     state = CLTrainState.create(
         apply_fn=assembly.apply,
-        params=params,
-        batch_stats=batch_stats,
+        backbone_apply_fn = assembly.backbone.apply,
+        params=assembly_params["params"],
+        batch_stats=assembly_params["batch_stats"],
         tx=tx,
-        dynamic_scale=dynamic_scale,
+        clf_heads_apply_fn = clf_heads_apply_fn,
+        clf_heads_params = clf_heads_params['params']
     )
 
     if config.restore_projector != "":
@@ -130,37 +149,37 @@ def create_train_state(
                 f"Config projector architecture ({config.projector}) does not match run {stored_run}"
             )
 
-        params = unfreeze(state.params)
-        params["projector"] = stored_projector_params
+        assembly_params = unfreeze(state.params)
+        assembly_params["projector"] = stored_projector_params
 
-        state = state.replace(params=freeze(params))
+        state = state.replace(params=freeze(assembly_params))
 
     return state
 
 
-def create_encoder_state(
-    state: CLTrainState, assembly: flax.linen.Module
-) -> EncoderState:
-    params = flax.core.frozen_dict.freeze(
-        {
-            "params": state.params["backbone"],
-            "batch_stats": state.batch_stats["backbone"],
-        }
-    )
-    return EncoderState.create(apply_fn=assembly.backbone.apply, params=params)
+# def create_encoder_state(
+#     state: CLTrainState, assembly: flax.linen.Module
+# ) -> EncoderState:
+#     params = flax.core.frozen_dict.freeze(
+#         {
+#             "params": state.params["backbone"],
+#             "batch_stats": state.batch_stats["backbone"],
+#         }
+#     )
+#     return EncoderState.create(apply_fn=assembly.backbone.apply, params=params)
 
 
-def restore_encoder_state(
-    config: ConfigDict, workdir: str, image_shape
-) -> EncoderState:
-    assembly = create_assembly(config)
-    state = create_train_state(
-        random.PRNGKey(0),
-        config,
-        assembly,
-        image_shape,
-        lambda _: 0,
-        workdir,
-    )
-    state = chkp.restore_checkpoint(workdir, state)
-    return create_encoder_state(state, assembly)
+# def restore_encoder_state(
+#     config: ConfigDict, workdir: str, image_shape
+# ) -> EncoderState:
+#     assembly = create_assembly(config)
+#     state = create_train_state(
+#         random.PRNGKey(0),
+#         config,
+#         assembly,
+#         image_shape,
+#         lambda _: 0,
+#         workdir,
+#     )
+#     state = chkp.restore_checkpoint(workdir, state)
+#     return create_encoder_state(state, assembly)
