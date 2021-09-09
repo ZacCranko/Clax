@@ -28,7 +28,7 @@ def get_workdir(*, logdir: str, name: str) -> str:
 
 def main(argv):
   if jax.process_index() == 0:
-    wandb.init()
+    wandb.init(anonymous='allow')
     wandb.config.update(FLAGS.config.to_dict())
     wandb.config.seed = datetime.now().microsecond
 

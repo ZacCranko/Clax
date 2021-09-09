@@ -174,9 +174,6 @@ def train_and_evaluate(config: ConfigDict, workdir: str) -> TrainState:
 
         # linear evaluation
         if train_iter.is_freq(step_freq=config.linear_eval_step_freq):
-            # accuracy, eval_metrics = eval_linear_accuracy(
-            #     key=get_key(), state_repl=jax_utils.unreplicate(state_repl)
-            # )
             state_repl, accuracy = eval_linear_accuracy(state_repl)
 
             wandb.log({"test": {"linear_accuracy": accuracy}}, commit=False)

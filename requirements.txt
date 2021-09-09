@@ -2,6 +2,7 @@ jax
 flax
 optax
 tensorflow_datasets
+tensorflow_probability
 ml_collections
 wandb
 
