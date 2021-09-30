@@ -4,3 +4,8 @@ __pycache__/
 *$py.class
 
 .DS_Store
+
+.vscode/
+checkpoints/
+tensorboard/
+wandb/
