@@ -25,7 +25,7 @@ def get_config() -> ml_collections.ConfigDict:
   config = ml_collections.ConfigDict()
   config.clf_config = get_clf_config()
 
-  config.name = "supervised"
+  config.name = "baseline"
 
   # `name` argument of tensorflow_datasets.builder()
   config.dataset = "cifar10"
@@ -54,7 +54,7 @@ def get_config() -> ml_collections.ConfigDict:
   config.cache_dataset = True
   config.half_precision = False
 
-  config.linear_eval_freq = 300
+  config.linear_eval_freq = 200
 
   config.num_train_steps = -1
   config.steps_per_eval = -1

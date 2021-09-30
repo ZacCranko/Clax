@@ -89,10 +89,13 @@ def linear_accuracy(state_repl: CLTrainState,
        (test_encodings, test_labels))
 
   logging.info("Training linear classifiers")
-  weights, biases, res = linear_eval.train(distributed_train_encodings,
-                                           distributed_train_labels,
-                                           distributed_train_mask,
-                                           l2_regularization=1e-6)
+  weights, biases, optimization_result = linear_eval.train(
+      distributed_train_encodings,
+      distributed_train_labels,
+      distributed_train_mask,
+      l2_regularization=1e-5,
+      tolerance=1e-4,
+  )
 
   accuracy = linear_eval.evaluate(distributed_test_encodings,
                                   distributed_test_labels,

@@ -33,7 +33,7 @@ def ntxent(
     axis_name: str = "batch",
     min_norm: float = 1e-4,
 ) -> Tuple[float, Tuple[float, float]]:
-  """[summary]
+  """Normalised temperature cross entropy loss
 
   Args:
     device_id (int): XLA device number this function is excuting on

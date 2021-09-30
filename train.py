@@ -180,7 +180,6 @@ def train_and_evaluate(config: ConfigDict, workdir: str) -> CLTrainState:
 
     wandb.log(dict(), step=train_iter.global_step)
 
-  # Wait until computations are done before exiting
-  jax.random.normal(PRNGKey(0), ()).block_until_ready()
+  jax.random.normal(jax.random.PRNGKey(0), ()).block_until_ready()
 
   return jax_utils.unreplicate(state_repl)

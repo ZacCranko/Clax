@@ -1,7 +1,5 @@
 import os
 
-# attempt to suppress some annoying tensorflow messages
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 from absl import app, flags, logging
 import jax, train, defaults
 from datetime import datetime
@@ -16,6 +14,10 @@ import wandb
 FLAGS = flags.FLAGS
 config_flags.DEFINE_config_dict('config', defaults.get_config())
 
+# attempt to suppress some tensorflow noise
+import tensorflow as tf
+
+tf.get_logger().setLevel('ERROR')
 logging.set_verbosity(logging.INFO)
 
 
