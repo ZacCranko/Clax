@@ -228,7 +228,7 @@ class TrainIterator:
         else:
             return self.is_freq(step_freq=self.steps_per_epoch)
 
-    def is_train_start(self) -> bool:
+    def is_start(self) -> bool:
         return self.global_step == self.start_step
 
     def get_epoch(self, *, float: bool = False) -> Any:
