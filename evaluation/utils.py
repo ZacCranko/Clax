@@ -1,11 +1,12 @@
 import logging
-from typing import Any, Callable, Tuple
+from typing import Any, Callable, Tuple, List
 from jax.numpy import ndarray
 from init import CLTrainState
 
 from data import TrainIterator
 from absl import logging
 
+import functools
 import init
 import jax
 from jax import numpy as jnp
@@ -27,7 +28,20 @@ def encode(state_repl: CLTrainState, images: ndarray):
                                       mutable=False)
 
 
-p_concatenate = jax.pmap(jnp.concatenate)
+concatenate = jax.pmap(jnp.concatenate)
+
+
+def concatenate_and_collect(batch_list: List[ndarray]) -> ndarray:
+  """Converts a list of batches sharded on d devices into a continuous array.
+
+  Args:
+      batch_list (List[ndarray]): list of arrays of batches with shape (d x *(a x b x c ...)).
+
+  Returns:
+      ndarray: Continuous array of shape (a * d * n x b x c ...), where n is the length of the list.
+  """
+  batch = concatenate(batch_list)
+  return batch.reshape(-1, *batch.shape[2:])
 
 
 def process_dataset(state_repl: init.CLTrainState, dataset_iter: TrainIterator):
@@ -36,17 +50,29 @@ def process_dataset(state_repl: init.CLTrainState, dataset_iter: TrainIterator):
 
   for batch_images, batch_labels in tqdm(dataset_iter, desc="Encoding"):
     batch_encodings = encode(state_repl, batch_images)
-    encodings.append(batch_encodings.reshape(-1, batch_encodings.shape[-1]))
-    labels.append(batch_labels.reshape(-1, batch_labels.shape[-1]))
 
-  return jnp.concatenate(encodings), jnp.concatenate(labels)
+    encodings.append(batch_encodings)
+    labels.append(batch_labels)
+
+  return concatenate_and_collect(encodings), concatenate_and_collect(labels)
 
 
 def linear_accuracy(state_repl: CLTrainState,
                     data_iterator: TrainIterator,
-                    test_size: float = 0.25):
+                    test_size: float = 0.25) -> float:
+  """Compute the linear accuracy of an encoder
+
+  Args:
+      state_repl (CLTrainState): CLTrainState replicated to each XLA device.
+      data_iterator (TrainIterator): Iterator from which to generate the encodings.
+      test_size (float, optional): Fraction of the data_iterator to use for test evaluation. Defaults to 0.25.
+
+  Returns:
+      float: Linear accuracy as a float in [0,1]
+  """
   encodings, labels = process_dataset(state_repl, data_iterator)
 
+  # linear_eval.py expects numerical labels
   labels = np.argmax(labels, axis=1)
 
   (train_encodings, test_encodings, train_labels,
@@ -62,7 +88,7 @@ def linear_accuracy(state_repl: CLTrainState,
    distributed_test_mask) = linear_eval.reshape_and_pad_data_for_devices(
        (test_encodings, test_labels))
 
-  logging.info("Training linear_classifiers")
+  logging.info("Training linear classifiers")
   weights, biases, res = linear_eval.train(distributed_train_encodings,
                                            distributed_train_labels,
                                            distributed_train_mask,
