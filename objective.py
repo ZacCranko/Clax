@@ -1,53 +1,28 @@
+from typing import Tuple
 import jax, functools
 from jax.numpy import ndarray
 from jax import random, numpy as jnp, lax, tree_util
 import jax.ops
 from jax.scipy.special import logsumexp
 
-from collections import namedtuple
-import optax._src.numerics as numerics
 import optax
 
 
 # doesn't seem to be a built-in implementation of this
 @jax.jit
-def normalize(input, min_norm: float = 1e-4):
+def normalize(input: ndarray, min_norm: float = 1e-4) -> ndarray:
+  """Normalise a batch to have unit norm
+
+  Args:
+      input (ndarray): Batch to be normalised along its last axis
+      min_norm (float, optional): Numerical stability parameter. Defaults to 1e-4.
+
+  Returns:
+      ndarray: [description]
+  """
   factor = jnp.linalg.norm(input, ord=2, axis=-1, keepdims=True)
   factor = jnp.maximum(factor, min_norm)
   return input / factor
-
-
-@jax.jit
-def ntxent_single(encodings, temp: float = 0.5, eps: float = 1e-4):
-  """Normalised Temperature Cross Entropy"""
-  # use this to verify correctness of the lower implementation
-  encodings = normalize(encodings, min_norm=eps)
-  encod_a, encod_b = jnp.array_split(
-      jnp.reshape(encodings, (-1, encodings.shape[-1])), 2)
-
-  # cross correlation matrices
-  xcor_aa = jnp.matmul(encod_a, encod_a.T) / temp
-  xcor_bb = jnp.matmul(encod_b, encod_b.T) / temp
-  xcor_ab = jnp.matmul(encod_a, encod_b.T) / temp
-
-  # smaller numbers here means the pairs are more aligned
-  align = -jnp.diag(xcor_ab).mean()
-
-  # need to exclude some elements from the logsumexp
-  xcor_aa = jax.ops.index_update(xcor_aa, jnp.diag_indices_from(xcor_aa),
-                                 -jnp.inf)
-  xcor_bb = jax.ops.index_update(xcor_bb, jnp.diag_indices_from(xcor_bb),
-                                 -jnp.inf)
-
-  cat_a = jnp.concatenate((xcor_aa, xcor_ab.T), axis=-1)
-  cat_b = jnp.concatenate((xcor_ab, xcor_bb), axis=-1)
-
-  # smaller numbers here means the pairs are more uniform
-  unif = logsumexp(cat_a, axis=-1).mean() / 2 + logsumexp(cat_b,
-                                                          axis=-1).mean() / 2
-  loss = align + unif
-
-  return loss, (-align * temp, -unif * temp)
 
 
 def ntxent(
@@ -57,7 +32,22 @@ def ntxent(
     unif_coeff: float = 1.0,
     axis_name: str = "batch",
     min_norm: float = 1e-4,
-):
+) -> Tuple[float, Tuple[float, float]]:
+  """[summary]
+
+  Args:
+    device_id (int): XLA device number this function is excuting on
+      batch (ndarray): Batch of encodings
+      temp (float, optional): Cross entropy temperature parameter. Defaults to 0.5.
+      unif_coeff (float, optional): Coefficient on the uniformity term. Defaults to 1.0.
+      axis_name (str, optional): Used for reference by the outer `pmap` function. Defaults to "batch".
+      min_norm (float, optional): Numerical stability parameter for the normalisation. Defaults to 1e-4.
+
+      In the return values of alignment and uniformity, greater values indicate greater alignment/uniformity.
+
+  Returns:
+      Tuple[float, Tuple[float, float]]: Returns a tuple of (ntxent, (alignment, uniformity))
+  """
   batch = normalize(batch, min_norm=min_norm)
   full_batch_by_device = jax.lax.all_gather(batch, axis_name=axis_name)
 
