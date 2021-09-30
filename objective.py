@@ -50,7 +50,6 @@ def ntxent_single(encodings, temp: float = 0.5, eps: float = 1e-4):
   return loss, (-align * temp, -unif * temp)
 
 
-@functools.partial(jax.pmap)
 def ntxent(
     device_id: int,
     batch: ndarray,
