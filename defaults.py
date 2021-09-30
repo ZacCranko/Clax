@@ -6,7 +6,7 @@ def get_clf_config() -> ml_collections.ConfigDict:
     clf_config = ml_collections.ConfigDict()
 
     clf_config.learning_rate = 1e-3
-    clf_config.batch_size = 1024
+    clf_config.batch_size = 2048
     clf_config.cache_dataset = True
     clf_config.start_step = 0
     clf_config.num_epochs = 1
@@ -53,14 +53,14 @@ def get_config() -> ml_collections.ConfigDict:
     config.cache_dataset = True
     config.half_precision = False
 
-    config.linear_eval_step_freq = 200
+    config.linear_eval_freq = 300
 
     config.num_train_steps = -1
     config.steps_per_eval = -1
     config.log_every_steps = -1
 
     # set to -1 to disable
-    config.checkpoint_step_freq = 1000
+    config.checkpoint_freq = 1000
     config.num_checkpoints_to_keep = 10
 
     config.restore_projector = ""
