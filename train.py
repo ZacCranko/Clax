@@ -2,14 +2,14 @@
 from absl import logging
 
 from typing import Any, Callable, Dict
-from flax.training.train_state import TrainState
 from data.iterator import TrainIterator
 from ml_collections import ConfigDict
-from jax.random import PRNGKey
+from init import CLTrainState
 
 import jax, functools
 
 from jax import numpy as jnp, lax
+from jax.numpy import ndarray
 
 from flax import jax_utils
 from flax.training import checkpoints as chkp
@@ -45,8 +45,8 @@ def sync_batch_stats(state):
   return state.replace(batch_stats=cross_replica_mean(state.batch_stats))
 
 
-def train_step(
-    state: TrainState,
+def _train_step(
+    state: CLTrainState,
     device_id: int,
     images,
     labels,
@@ -56,7 +56,6 @@ def train_step(
     axis_name: str,
     is_supervised: bool = False,
 ):
-  """Perform a single training step."""
 
   def loss_fn(params):
     """loss function used for training."""
@@ -108,7 +107,7 @@ def train_step(
   return new_state, lax.pmean(metrics, axis_name=axis_name)
 
 
-def save_checkpoint(config: ConfigDict, workdir: str, state: TrainState):
+def save_checkpoint(config: ConfigDict, workdir: str, state: CLTrainState):
   if jax.process_index() == 0:
     # get train state from the first replica
     state = jax.device_get(jax_utils.unreplicate(state))
@@ -119,9 +118,9 @@ def save_checkpoint(config: ConfigDict, workdir: str, state: TrainState):
                          keep=config.num_checkpoints_to_keep)
 
 
-def train_and_evaluate(config: ConfigDict, workdir: str) -> TrainState:
+def train_and_evaluate(config: ConfigDict, workdir: str) -> CLTrainState:
   global key
-  key = PRNGKey(config.seed)
+  key = jax.random.PRNGKey(config.seed)
 
   summary_writer = SummaryWriter(workdir)
   summary_writer.hparams(config.to_dict())
@@ -142,12 +141,6 @@ def train_and_evaluate(config: ConfigDict, workdir: str) -> TrainState:
       dataset=config.dataset,
       is_pretrain=False,
   )
-  linear_valid_iter = data.config_create_input_iter(
-      config.clf_config,
-      dataset=config.dataset,
-      split="test",
-      is_pretrain=False,
-  )
 
   # replicate parameters to xla devices
   state_repl = jax_utils.replicate(state)
@@ -155,7 +148,7 @@ def train_and_evaluate(config: ConfigDict, workdir: str) -> TrainState:
 
   p_train_step = jax.pmap(
       functools.partial(
-          train_step,
+          _train_step,
           temp=config.ntxent_temp,
           unif_coeff=config.ntxent_unif_coeff,
           learning_rate_fn=learning_rate_fn,
@@ -165,22 +158,20 @@ def train_and_evaluate(config: ConfigDict, workdir: str) -> TrainState:
       axis_name="batch",
   )
 
-  logging.info("Starting training")
+  logging.info("Model compiling")
   for batch in train_iter:
     state_repl, metrics = p_train_step(state_repl, device_ids, *batch)
     wandb.log({"train": jax.tree_map(lambda x: x.mean(), metrics)},
               commit=False)
 
     if train_iter.is_start():
-      logging.info("Model is compiled")
+      logging.info("Started training")
 
     # linear evaluation
     if train_iter.is_freq(step_freq=config.linear_eval_freq):
-      accuracy = linear_accuracy(
-          state_repl,
-          linear_train_iter,
-          linear_valid_iter,
-      )
+      accuracy = linear_accuracy(state_repl,
+                                 linear_train_iter,
+                                 test_size=config.clf_config.test_size)
 
       wandb.log({"test": {"linear_accuracy": accuracy}}, commit=False)
 

@@ -1,15 +1,16 @@
 import ml_collections
+import jax
 
 
 def get_clf_config() -> ml_collections.ConfigDict:
   """Get the default hyperparameter configuration."""
   clf_config = ml_collections.ConfigDict()
 
-  clf_config.learning_rate = 1e-3
-  clf_config.batch_size = 4096
+  clf_config.batch_size = 128 * jax.local_device_count()
   clf_config.cache_dataset = True
   clf_config.start_step = 0
-  clf_config.num_epochs = 1
+  clf_config.num_epochs = 4 / 3
+  clf_config.test_size = 1 / 4
   clf_config.num_steps = -1
 
   # l2 regularizer coefficient
@@ -47,7 +48,7 @@ def get_config() -> ml_collections.ConfigDict:
 
   # set either num_epochs or num_steps to a positive number
   config.start_step = 0
-  config.num_epochs = 300
+  config.num_epochs = 200
   config.num_steps = -1
 
   config.cache_dataset = True
