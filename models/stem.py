@@ -6,6 +6,7 @@ ModuleDef = Any
 from flax import linen as nn
 import jax.numpy as jnp
 
+
 class CIFAR(nn.Module):
   """CIFAR ResNet Stem"""
   norm: ModuleDef
@@ -20,6 +21,7 @@ class CIFAR(nn.Module):
     x = self.norm(name='bn_stem')(x)
     x = nn.relu(x)
     return x
+
 
 class ImageNet(nn.Module):
   """ImageNet ResNet Stem"""

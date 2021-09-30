@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 """Flax implementation of ResNet V1."""
 
 # See issue #620.
@@ -24,6 +23,7 @@ from flax import linen as nn
 import jax.numpy as jnp
 
 ModuleDef = Any
+
 
 class ResNetBlock(nn.Module):
   """ResNet block."""
@@ -43,8 +43,8 @@ class ResNetBlock(nn.Module):
     y = self.norm(scale_init=nn.initializers.zeros)(y)
 
     if residual.shape != y.shape:
-      residual = self.conv(self.filters, (1, 1),
-                           self.strides, name='conv_proj')(residual)
+      residual = self.conv(self.filters, (1, 1), self.strides,
+                           name='conv_proj')(residual)
       residual = self.norm(name='norm_proj')(residual)
 
     return self.act(residual + y)
@@ -72,7 +72,8 @@ class BottleneckResNetBlock(nn.Module):
 
     if residual.shape != y.shape:
       residual = self.conv(self.filters * 4, (1, 1),
-                           self.strides, name='conv_proj')(residual)
+                           self.strides,
+                           name='conv_proj')(residual)
       residual = self.norm(name='norm_proj')(residual)
 
     return self.act(residual + y)
@@ -97,12 +98,12 @@ class ResNet(nn.Module):
                    epsilon=1e-5,
                    dtype=self.dtype,
                    axis_name=self.axis_name)
-    
-    x = self.stem(norm=norm, conv=conv)(x, train = train)
+
+    x = self.stem(norm=norm, conv=conv)(x, train=train)
     for i, block_size in enumerate(self.stage_sizes):
       for j in range(block_size):
         strides = (2, 2) if i > 0 and j == 0 else (1, 1)
-        x = self.block_cls(self.num_filters * 2 ** i,
+        x = self.block_cls(self.num_filters * 2**i,
                            strides=strides,
                            conv=conv,
                            norm=norm,
@@ -111,17 +112,19 @@ class ResNet(nn.Module):
     return x
 
 
-ResNet18 = partial(ResNet, stage_sizes=[2, 2, 2, 2],
-                   block_cls=ResNetBlock)
-ResNet34 = partial(ResNet, stage_sizes=[3, 4, 6, 3],
-                   block_cls=ResNetBlock)
-ResNet50 = partial(ResNet, stage_sizes=[3, 4, 6, 3],
+ResNet18 = partial(ResNet, stage_sizes=[2, 2, 2, 2], block_cls=ResNetBlock)
+ResNet34 = partial(ResNet, stage_sizes=[3, 4, 6, 3], block_cls=ResNetBlock)
+ResNet50 = partial(ResNet,
+                   stage_sizes=[3, 4, 6, 3],
                    block_cls=BottleneckResNetBlock)
-ResNet101 = partial(ResNet, stage_sizes=[3, 4, 23, 3],
+ResNet101 = partial(ResNet,
+                    stage_sizes=[3, 4, 23, 3],
                     block_cls=BottleneckResNetBlock)
-ResNet152 = partial(ResNet, stage_sizes=[3, 8, 36, 3],
+ResNet152 = partial(ResNet,
+                    stage_sizes=[3, 8, 36, 3],
                     block_cls=BottleneckResNetBlock)
-ResNet200 = partial(ResNet, stage_sizes=[3, 24, 36, 3],
+ResNet200 = partial(ResNet,
+                    stage_sizes=[3, 24, 36, 3],
                     block_cls=BottleneckResNetBlock)
 
 # Used for testing only.

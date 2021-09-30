@@ -1,4 +1,3 @@
 from . import stem
-from . import projector 
+from . import projector
 from . import resnet
-from . import classifier

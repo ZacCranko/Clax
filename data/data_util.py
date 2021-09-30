@@ -26,20 +26,19 @@ import tensorflow.compat.v1 as tf
 
 CROP_PROPORTION = 0.875  # Standard for ImageNet.
 
+
 def random_apply(func, p, x):
   """Randomly apply function func to x with probability p."""
   return tf.cond(
       tf.less(tf.random_uniform([], minval=0, maxval=1, dtype=tf.float32),
-              tf.cast(p, tf.float32)),
-      lambda: func(x),
-      lambda: x)
+              tf.cast(p, tf.float32)), lambda: func(x), lambda: x)
 
 
 def random_brightness(image, max_delta, impl='simclrv2'):
   """A multiplicative vs additive change of brightness."""
   if impl == 'simclrv2':
-    factor = tf.random_uniform(
-        [], tf.maximum(1.0 - max_delta, 0), 1.0 + max_delta)
+    factor = tf.random_uniform([], tf.maximum(1.0 - max_delta, 0),
+                               1.0 + max_delta)
     image = image * factor
   elif impl == 'simclrv1':
     image = tf.image.random_brightness(image, max_delta=max_delta)
@@ -73,11 +72,19 @@ def color_jitter(image, strength, random_order=True, impl='simclrv2'):
   saturation = 0.8 * strength
   hue = 0.2 * strength
   if random_order:
-    return color_jitter_rand(
-        image, brightness, contrast, saturation, hue, impl=impl)
+    return color_jitter_rand(image,
+                             brightness,
+                             contrast,
+                             saturation,
+                             hue,
+                             impl=impl)
   else:
-    return color_jitter_nonrand(
-        image, brightness, contrast, saturation, hue, impl=impl)
+    return color_jitter_nonrand(image,
+                                brightness,
+                                contrast,
+                                saturation,
+                                hue,
+                                impl=impl)
 
 
 def color_jitter_nonrand(image,
@@ -101,16 +108,17 @@ def color_jitter_nonrand(image,
     The distorted image tensor.
   """
   with tf.name_scope('distort_color'):
+
     def apply_transform(i, x, brightness, contrast, saturation, hue):
       """Apply the i-th transformation."""
       if brightness != 0 and i == 0:
         x = random_brightness(x, max_delta=brightness, impl=impl)
       elif contrast != 0 and i == 1:
-        x = tf.image.random_contrast(
-            x, lower=1-contrast, upper=1+contrast)
+        x = tf.image.random_contrast(x, lower=1 - contrast, upper=1 + contrast)
       elif saturation != 0 and i == 2:
-        x = tf.image.random_saturation(
-            x, lower=1-saturation, upper=1+saturation)
+        x = tf.image.random_saturation(x,
+                                       lower=1 - saturation,
+                                       upper=1 + saturation)
       elif hue != 0:
         x = tf.image.random_hue(x, max_delta=hue)
       return x
@@ -142,8 +150,10 @@ def color_jitter_rand(image,
     The distorted image tensor.
   """
   with tf.name_scope('distort_color'):
+
     def apply_transform(i, x):
       """Apply the i-th transformation."""
+
       def brightness_foo():
         if brightness == 0:
           return x
@@ -154,18 +164,24 @@ def color_jitter_rand(image,
         if contrast == 0:
           return x
         else:
-          return tf.image.random_contrast(x, lower=1-contrast, upper=1+contrast)
+          return tf.image.random_contrast(x,
+                                          lower=1 - contrast,
+                                          upper=1 + contrast)
+
       def saturation_foo():
         if saturation == 0:
           return x
         else:
-          return tf.image.random_saturation(
-              x, lower=1-saturation, upper=1+saturation)
+          return tf.image.random_saturation(x,
+                                            lower=1 - saturation,
+                                            upper=1 + saturation)
+
       def hue_foo():
         if hue == 0:
           return x
         else:
           return tf.image.random_hue(x, max_delta=hue)
+
       x = tf.cond(tf.less(i, 2),
                   lambda: tf.cond(tf.less(i, 1), brightness_foo, contrast_foo),
                   lambda: tf.cond(tf.less(i, 3), saturation_foo, hue_foo))
@@ -178,8 +194,8 @@ def color_jitter_rand(image,
     return image
 
 
-def _compute_crop_shape(
-    image_height, image_width, aspect_ratio, crop_proportion):
+def _compute_crop_shape(image_height, image_width, aspect_ratio,
+                        crop_proportion):
   """Compute aspect ratio-preserving shape for central crop.
 
   The resulting shape retains `crop_proportion` along one side and a proportion
@@ -199,24 +215,21 @@ def _compute_crop_shape(
   image_height_float = tf.cast(image_height, tf.float32)
 
   def _requested_aspect_ratio_wider_than_image():
-    crop_height = tf.cast(tf.rint(
-        crop_proportion / aspect_ratio * image_width_float), tf.int32)
-    crop_width = tf.cast(tf.rint(
-        crop_proportion * image_width_float), tf.int32)
+    crop_height = tf.cast(
+        tf.rint(crop_proportion / aspect_ratio * image_width_float), tf.int32)
+    crop_width = tf.cast(tf.rint(crop_proportion * image_width_float), tf.int32)
     return crop_height, crop_width
 
   def _image_wider_than_requested_aspect_ratio():
-    crop_height = tf.cast(
-        tf.rint(crop_proportion * image_height_float), tf.int32)
-    crop_width = tf.cast(tf.rint(
-        crop_proportion * aspect_ratio *
-        image_height_float), tf.int32)
+    crop_height = tf.cast(tf.rint(crop_proportion * image_height_float),
+                          tf.int32)
+    crop_width = tf.cast(
+        tf.rint(crop_proportion * aspect_ratio * image_height_float), tf.int32)
     return crop_height, crop_width
 
-  return tf.cond(
-      aspect_ratio > image_width_float / image_height_float,
-      _requested_aspect_ratio_wider_than_image,
-      _image_wider_than_requested_aspect_ratio)
+  return tf.cond(aspect_ratio > image_width_float / image_height_float,
+                 _requested_aspect_ratio_wider_than_image,
+                 _image_wider_than_requested_aspect_ratio)
 
 
 def center_crop(image, height, width, crop_proportion):
@@ -234,12 +247,12 @@ def center_crop(image, height, width, crop_proportion):
   shape = tf.shape(image)
   image_height = shape[0]
   image_width = shape[1]
-  crop_height, crop_width = _compute_crop_shape(
-      image_height, image_width, height / width, crop_proportion)
+  crop_height, crop_width = _compute_crop_shape(image_height, image_width,
+                                                height / width, crop_proportion)
   offset_height = ((image_height - crop_height) + 1) // 2
   offset_width = ((image_width - crop_width) + 1) // 2
-  image = tf.image.crop_to_bounding_box(
-      image, offset_height, offset_width, crop_height, crop_width)
+  image = tf.image.crop_to_bounding_box(image, offset_height, offset_width,
+                                        crop_height, crop_width)
 
   image = tf.image.resize_bicubic([image], [height, width])[0]
 
@@ -292,8 +305,8 @@ def distorted_bounding_box_crop(image,
     # Crop the image to the specified bounding box.
     offset_y, offset_x, _ = tf.unstack(bbox_begin)
     target_height, target_width, _ = tf.unstack(bbox_size)
-    image = tf.image.crop_to_bounding_box(
-        image, offset_y, offset_x, target_height, target_width)
+    image = tf.image.crop_to_bounding_box(image, offset_y, offset_x,
+                                          target_height, target_width)
 
     return image
 
@@ -340,8 +353,8 @@ def gaussian_blur(image, kernel_size, sigma, padding='SAME'):
   radius = tf.to_int32(kernel_size / 2)
   kernel_size = radius * 2 + 1
   x = tf.to_float(tf.range(-radius, radius + 1))
-  blur_filter = tf.exp(
-      -tf.pow(x, 2.0) / (2.0 * tf.pow(tf.to_float(sigma), 2.0)))
+  blur_filter = tf.exp(-tf.pow(x, 2.0) /
+                       (2.0 * tf.pow(tf.to_float(sigma), 2.0)))
   blur_filter /= tf.reduce_sum(blur_filter)
   # One vertical and one horizontal filter.
   blur_v = tf.reshape(blur_filter, [kernel_size, 1, 1, 1])
@@ -354,10 +367,14 @@ def gaussian_blur(image, kernel_size, sigma, padding='SAME'):
     # Tensorflow requires batched input to convolutions, which we can fake with
     # an extra dimension.
     image = tf.expand_dims(image, axis=0)
-  blurred = tf.nn.depthwise_conv2d(
-      image, blur_h, strides=[1, 1, 1, 1], padding=padding)
-  blurred = tf.nn.depthwise_conv2d(
-      blurred, blur_v, strides=[1, 1, 1, 1], padding=padding)
+  blurred = tf.nn.depthwise_conv2d(image,
+                                   blur_h,
+                                   strides=[1, 1, 1, 1],
+                                   padding=padding)
+  blurred = tf.nn.depthwise_conv2d(blurred,
+                                   blur_v,
+                                   strides=[1, 1, 1, 1],
+                                   padding=padding)
   if expand_batch_dim:
     blurred = tf.squeeze(blurred, axis=0)
   return blurred
@@ -375,19 +392,26 @@ def random_crop_with_resize(image, height, width, p=1.0):
   Returns:
     A preprocessed image `Tensor`.
   """
+
   def _transform(image):  # pylint: disable=missing-docstring
     image = crop_and_resize(image, height, width)
     return image
+
   return random_apply(_transform, p=p, x=image)
 
 
-def random_color_jitter(image, p=1.0, impl='simclrv2',color_jitter_strength = 1.0):
+def random_color_jitter(image,
+                        p=1.0,
+                        impl='simclrv2',
+                        color_jitter_strength=1.0):
 
   def _transform(image):
-    color_jitter_t = functools.partial(
-        color_jitter, strength= color_jitter_strength, impl=impl)
+    color_jitter_t = functools.partial(color_jitter,
+                                       strength=color_jitter_strength,
+                                       impl=impl)
     image = random_apply(color_jitter_t, p=0.8, x=image)
     return random_apply(to_grayscale, p=0.2, x=image)
+
   return random_apply(_transform, p=p, x=image)
 
 
@@ -404,10 +428,14 @@ def random_blur(image, height, width, p=1.0):
     A preprocessed image `Tensor`.
   """
   del width
+
   def _transform(image):
     sigma = tf.random.uniform([], 0.1, 2.0, dtype=tf.float32)
-    return gaussian_blur(
-        image, kernel_size=height//10, sigma=sigma, padding='SAME')
+    return gaussian_blur(image,
+                         kernel_size=height // 10,
+                         sigma=sigma,
+                         padding='SAME')
+
   return random_apply(_transform, p=p, x=image)
 
 
@@ -423,6 +451,7 @@ def batch_random_blur(images_list, height, width, blur_probability=0.5):
   Returns:
     Preprocessed feature list.
   """
+
   def generate_selector(p, bsz):
     shape = [bsz, 1, 1, 1]
     selector = tf.cast(
@@ -493,8 +522,12 @@ def preprocess_for_eval(image, height, width, crop=True):
   return image
 
 
-def preprocess_image(image, height, width, is_training=False,
-                     color_distort=True, test_crop=True):
+def preprocess_image(image,
+                     height,
+                     width,
+                     is_training=False,
+                     color_distort=True,
+                     test_crop=True):
   """Preprocesses the given image.
 
   Args:
