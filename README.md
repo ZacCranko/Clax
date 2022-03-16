@@ -1,5 +1,5 @@
-# CLAX
+# Clax
 
 Contrastive Learning with JAX 
 
-Stuff happens when running `main.py`. Enjoy.
+Stuff happens when you run `main.py`. Enjoy.
